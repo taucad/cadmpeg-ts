@@ -6,6 +6,11 @@
 //! `CadmpegError`; a panic aborts the instance, and the TypeScript layer
 //! discards it.
 
+#![allow(
+    clippy::must_use_candidate,
+    reason = "every export is called from JavaScript, which never sees `#[must_use]`"
+)]
+
 use wasm_bindgen::prelude::*;
 
 /// A completed conversion: the written bytes and the report as JSON.

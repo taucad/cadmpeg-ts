@@ -7,6 +7,11 @@
 //! `ENGINE_FAILED`. Binding failures reject with the error as JSON in the
 //! message, which the TypeScript layer turns into a `CadmpegError`.
 
+#![allow(
+    clippy::must_use_candidate,
+    reason = "every export is called from JavaScript, which never sees `#[must_use]`"
+)]
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
