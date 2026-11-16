@@ -335,6 +335,9 @@ jobs:
           # release line, so a 15.0 guest must accept the recorded version skew.
           export IGNORE_OSVERSION=yes
           export RUSTUP_IO_THREADS=1
+          # Four parallel rustc processes on the largest codec crates exceed the
+          # guest's 12 GB at one codegen unit each.
+          export CARGO_BUILD_JOBS=2
           sudo -E pkg install --yes node22 npm-node22 curl
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain none
