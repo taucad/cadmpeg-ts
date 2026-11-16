@@ -299,6 +299,11 @@ jobs:
         if: matrix.cross == '-x'
         with:
           tool: cargo-zigbuild
+      # The macOS runners have 7 GB; three codec crates compiling at one
+      # codegen unit each swap until the job times out.
+      - name: Limit parallel crates on macOS
+        if: runner.os == 'macOS'
+        run: echo 'CARGO_BUILD_JOBS=2' >> "$GITHUB_ENV"
       - name: Relax link-time optimization for the i686 MSVC link
         if: matrix.target == 'i686-pc-windows-msvc'
         shell: bash
