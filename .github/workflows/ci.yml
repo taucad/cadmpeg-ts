@@ -185,6 +185,18 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      # A hosted Linux runner has less memory than rustc needs to compile
+      # several of cadmpeg's largest codec crates at once with one codegen
+      # unit each; without swap the runner is killed mid-build.
+      - name: Add swap for the codec crates
+        if: runner.os == 'Linux'
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 12G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci
+          sudo swapon /swapfile-ci
+          free -h
       - uses: ./.github/actions/setup
         with:
           node-version: '26'
@@ -260,6 +272,18 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      # A hosted Linux runner has less memory than rustc needs to compile
+      # several of cadmpeg's largest codec crates at once with one codegen
+      # unit each; without swap the runner is killed mid-build.
+      - name: Add swap for the codec crates
+        if: runner.os == 'Linux'
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 12G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci
+          sudo swapon /swapfile-ci
+          free -h
       - uses: ./.github/actions/setup
         if: matrix.target != 'x86_64-unknown-freebsd'
         with:
@@ -360,6 +384,18 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      # A hosted Linux runner has less memory than rustc needs to compile
+      # several of cadmpeg's largest codec crates at once with one codegen
+      # unit each; without swap the runner is killed mid-build.
+      - name: Add swap for the codec crates
+        if: runner.os == 'Linux'
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 12G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci
+          sudo swapon /swapfile-ci
+          free -h
       - uses: ./.github/actions/setup
         with:
           node-version: '26'
