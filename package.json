@@ -1,0 +1,146 @@
+{
+  "name": "cadmpeg-ts",
+  "version": "0.0.0",
+  "description": "Unofficial TypeScript API for cadmpeg: convert SOLIDWORKS, CATIA, Inventor, NX, Creo, Fusion, FreeCAD, Rhino, STEP and IGES files in browsers and Node.js.",
+  "keywords": [
+    "brep",
+    "cad",
+    "cadmpeg",
+    "converter",
+    "iges",
+    "step",
+    "wasm"
+  ],
+  "homepage": "https://github.com/taucad/cadmpeg-ts#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/cadmpeg-ts/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Richard Fontein",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/cadmpeg-ts.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "compatibility.md",
+    "CHANGELOG.md",
+    "BREAKING_CHANGES.md",
+    "NOTICE",
+    "license"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "node": "./dist/index.node.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/cjs-error.d.cts",
+        "default": "./dist/cjs-error.cjs"
+      },
+      "default": "./dist/index.mjs"
+    },
+    "./formats": {
+      "types": "./dist/formats.d.mts",
+      "import": "./dist/formats.mjs",
+      "default": "./dist/formats.mjs"
+    },
+    "./wasm/*": {
+      "default": "./dist/wasm/*"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "pnpm run build:napi && pnpm run build:wasm && tsdown && node scripts/copy-assets.mjs",
+    "build:napi": "node scripts/apply-patches.mjs && pnpm exec napi build --platform --release --esm --js index.js --dts index.d.ts --manifest-path rust/binding-napi/Cargo.toml --output-dir src/native -- --locked",
+    "build:wasm": "node scripts/apply-patches.mjs && node scripts/build-wasm.mjs",
+    "check:dead-code": "knip",
+    "check:size": "size-limit && pnpm run check:wasm-size",
+    "check:wasm-size": "node scripts/check-wasm-size.mjs",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --deny-warnings --type-aware && eslint .",
+    "patches": "node scripts/apply-patches.mjs",
+    "patches:check": "node scripts/apply-patches.mjs --check",
+    "pkgcheck": "pnpm run validate-pack && publint && attw --pack . --profile esm-only --entrypoints .",
+    "plan:check": "nx release plan:check",
+    "prepublishOnly": "node scripts/validate-pack.mjs",
+    "prose": "./scripts/check-prose.sh",
+    "release:prepare": "node scripts/prepare-release.mjs",
+    "test": "vitest run",
+    "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
+    "test:coverage": "vitest run --coverage",
+    "test:package": "node scripts/test-package.mjs",
+    "test:rust": "node scripts/apply-patches.mjs && cargo test --manifest-path rust/Cargo.toml --workspace",
+    "typecheck": "tsc --noEmit",
+    "validate-pack": "node scripts/validate-pack.mjs",
+    "workflows": "./scripts/check-workflows.sh"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@eslint/js": "9.32.0",
+    "@napi-rs/cli": "3.8.6",
+    "@nx/js": "23.2.1",
+    "@size-limit/file": "13.0.3",
+    "@types/node": "24.13.3",
+    "@vitest/browser-playwright": "4.1.12",
+    "@vitest/coverage-v8": "4.1.12",
+    "binaryen": "132.0.0",
+    "eslint": "9.32.0",
+    "globals": "17.11.0",
+    "knip": "6.17.1",
+    "nx": "23.2.1",
+    "oxfmt": "0.36.0",
+    "oxlint": "1.70.0",
+    "oxlint-tsgolint": "0.22.1",
+    "pkg-pr-new": "0.0.88",
+    "playwright": "1.62.0",
+    "publint": "0.3.23",
+    "semver": "7.8.5",
+    "size-limit": "13.0.3",
+    "tsdown": "0.22.14",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.61.1",
+    "vitest": "4.1.12"
+  },
+  "napi": {
+    "binaryName": "cadmpeg-ts",
+    "packageName": "cadmpeg-ts",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "i686-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "armv7-unknown-linux-gnueabihf",
+      "powerpc64le-unknown-linux-gnu",
+      "s390x-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "armv7-unknown-linux-musleabihf",
+      "aarch64-linux-android",
+      "armv7-linux-androideabi",
+      "x86_64-unknown-freebsd"
+    ]
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

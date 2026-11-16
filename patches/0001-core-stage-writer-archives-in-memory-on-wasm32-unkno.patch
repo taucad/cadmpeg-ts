@@ -1,0 +1,251 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tau <noreply@tau.new>
+Date: Mon, 16 Nov 2026 16:04:01 +0000
+Subject: [PATCH 1/2] core: stage writer archives in memory on
+ wasm32-unknown-unknown
+
+The Fusion, FreeCAD and Rhino writers assemble their archives in an
+anonymous temporary file. On wasm32-unknown-unknown there is no
+filesystem: tempfile::tempfile() panics in std::env::temp_dir. Add
+cadmpeg_core::io::staging_buffer(), which keeps the temporary file on
+native targets and uses an in-memory cursor where no filesystem exists,
+and use it at the four staging sites.
+---
+ crates/cadmpeg-codec-f3d/Cargo.toml           |   1 -
+ .../src/writer/generate/mod.rs                |   2 +-
+ crates/cadmpeg-codec-freecad/Cargo.toml       |   1 -
+ crates/cadmpeg-codec-freecad/src/writer.rs    |   2 +-
+ crates/cadmpeg-codec-rhino/Cargo.toml         |   1 -
+ crates/cadmpeg-codec-rhino/src/writer.rs      |   6 +-
+ crates/cadmpeg-core/Cargo.toml                |   3 +
+ crates/cadmpeg-core/src/io.rs                 |   3 +
+ crates/cadmpeg-core/src/io/staging.rs         | 102 ++++++++++++++++++
+ 9 files changed, 113 insertions(+), 8 deletions(-)
+ create mode 100644 crates/cadmpeg-core/src/io/staging.rs
+
+diff --git a/crates/cadmpeg-codec-f3d/Cargo.toml b/crates/cadmpeg-codec-f3d/Cargo.toml
+index 1340af966..b55475918 100644
+--- a/crates/cadmpeg-codec-f3d/Cargo.toml
++++ b/crates/cadmpeg-codec-f3d/Cargo.toml
+@@ -31,7 +31,6 @@ lzma-rs.workspace = true
+ sha2.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+-tempfile.workspace = true
+ serde-value.workspace = true
+ memchr.workspace = true
+ 
+diff --git a/crates/cadmpeg-codec-f3d/src/writer/generate/mod.rs b/crates/cadmpeg-codec-f3d/src/writer/generate/mod.rs
+index c29f7b657..e94ae6c1c 100644
+--- a/crates/cadmpeg-codec-f3d/src/writer/generate/mod.rs
++++ b/crates/cadmpeg-codec-f3d/src/writer/generate/mod.rs
+@@ -83,7 +83,7 @@ pub(super) fn write_new(
+     }
+     let design_registry = GeneratedDesignRegistry::new(target, design_bindings, &attributes)?;
+     let smbh = encode_smbh(target, &native, &attributes)?;
+-    let mut staged = tempfile::tempfile()?;
++    let mut staged = cadmpeg_core::io::staging_buffer()?;
+     let mut archive = zip::ZipWriter::new(&mut staged);
+     let options = crate::zip_write::file_options(zip::CompressionMethod::Stored);
+     archive
+diff --git a/crates/cadmpeg-codec-freecad/Cargo.toml b/crates/cadmpeg-codec-freecad/Cargo.toml
+index 5f9470bd6..d3ad7ae11 100644
+--- a/crates/cadmpeg-codec-freecad/Cargo.toml
++++ b/crates/cadmpeg-codec-freecad/Cargo.toml
+@@ -23,7 +23,6 @@ serde.workspace = true
+ serde_json.workspace = true
+ roxmltree.workspace = true
+ zip.workspace = true
+-tempfile.workspace = true
+ 
+ [[bin]]
+ name = "fcstd-profile"
+diff --git a/crates/cadmpeg-codec-freecad/src/writer.rs b/crates/cadmpeg-codec-freecad/src/writer.rs
+index cd7b23b51..d50a7b2ff 100644
+--- a/crates/cadmpeg-codec-freecad/src/writer.rs
++++ b/crates/cadmpeg-codec-freecad/src/writer.rs
+@@ -24,7 +24,7 @@ trait WriteSeek: Write + Seek {}
+ impl<T: Write + Seek> WriteSeek for T {}
+ 
+ fn write(output: &mut dyn Write, resolution: &Resolution<'_>) -> Result<WriteOutcome, CodecError> {
+-    let mut staged = tempfile::tempfile()?;
++    let mut staged = cadmpeg_core::io::staging_buffer()?;
+     let report = write_seekable(&mut staged, resolution)?;
+     staged.seek(SeekFrom::Start(0))?;
+     std::io::copy(&mut staged, output)?;
+diff --git a/crates/cadmpeg-codec-rhino/Cargo.toml b/crates/cadmpeg-codec-rhino/Cargo.toml
+index 7ecbfd87a..10cea2386 100644
+--- a/crates/cadmpeg-codec-rhino/Cargo.toml
++++ b/crates/cadmpeg-codec-rhino/Cargo.toml
+@@ -29,7 +29,6 @@ sha2.workspace = true
+ sha1.workspace = true
+ serde_json.workspace = true
+ serde.workspace = true
+-tempfile.workspace = true
+ roxmltree.workspace = true
+ 
+ [dev-dependencies]
+diff --git a/crates/cadmpeg-codec-rhino/src/writer.rs b/crates/cadmpeg-codec-rhino/src/writer.rs
+index 9d60ed1ff..d212d61a2 100644
+--- a/crates/cadmpeg-codec-rhino/src/writer.rs
++++ b/crates/cadmpeg-codec-rhino/src/writer.rs
+@@ -125,7 +125,7 @@ fn write(
+     version: RhinoArchiveVersion,
+     output: &mut dyn Write,
+ ) -> Result<(), CodecError> {
+-    let mut staged = tempfile::tempfile()?;
++    let mut staged = cadmpeg_core::io::staging_buffer()?;
+     write_seekable(ir, version, &mut staged)?;
+     staged.seek(SeekFrom::Start(0))?;
+     std::io::copy(&mut staged, output)?;
+@@ -288,7 +288,7 @@ struct WritePlan<'a> {
+     curves: Vec<(&'a str, ClassPayload)>,
+     /// Each free surface's identity and encoded payload.
+     surfaces: Vec<(&'a str, ClassPayload)>,
+-    brep_records: std::fs::File,
++    brep_records: cadmpeg_core::io::StagingBuffer,
+     topology_points: std::collections::BTreeSet<String>,
+     point_groups: Vec<PointGroup>,
+ }
+@@ -681,7 +681,7 @@ fn prepare_write(
+     for mesh in &model.tessellations {
+         check_mesh(mesh)?;
+     }
+-    let mut brep_records = tempfile::tempfile()?;
++    let mut brep_records = cadmpeg_core::io::staging_buffer()?;
+     for scope in &breps {
+         let body = &scope.ir.model.bodies[0];
+         let model = WritableModel::try_new(&scope.ir)?;
+diff --git a/crates/cadmpeg-core/Cargo.toml b/crates/cadmpeg-core/Cargo.toml
+index e265f79e7..e62a99945 100644
+--- a/crates/cadmpeg-core/Cargo.toml
++++ b/crates/cadmpeg-core/Cargo.toml
+@@ -30,6 +30,9 @@ schemars = { workspace = true, optional = true }
+ serde_json.workspace = true
+ thiserror.workspace = true
+ 
++[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
++tempfile.workspace = true
++
+ [dev-dependencies]
+ toml.workspace = true
+ 
+diff --git a/crates/cadmpeg-core/src/io.rs b/crates/cadmpeg-core/src/io.rs
+index 49974b87d..d6a164991 100644
+--- a/crates/cadmpeg-core/src/io.rs
++++ b/crates/cadmpeg-core/src/io.rs
+@@ -6,3 +6,6 @@ use std::io::{Read, Seek};
+ /// Object-safe input bound combining [`Read`] and [`Seek`].
+ pub trait ReadSeek: Read + Seek {}
+ impl<T: Read + Seek> ReadSeek for T {}
++
++mod staging;
++pub use staging::{staging_buffer, StagingBuffer};
+diff --git a/crates/cadmpeg-core/src/io/staging.rs b/crates/cadmpeg-core/src/io/staging.rs
+new file mode 100644
+index 000000000..6a7f79520
+--- /dev/null
++++ b/crates/cadmpeg-core/src/io/staging.rs
+@@ -0,0 +1,102 @@
++// SPDX-License-Identifier: Apache-2.0
++//! Seekable scratch storage for writers that assemble an archive before
++//! copying it to a forward-only output.
++
++use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
++
++/// Scratch storage a writer can write, seek and read back.
++///
++/// Native builds stage in an anonymous temporary file, so a large archive
++/// does not have to fit in memory twice. Targets without a filesystem
++/// (`wasm32-unknown-unknown`) stage in memory instead: there,
++/// `tempfile::tempfile()` panics because `std::env::temp_dir` is unsupported.
++#[derive(Debug)]
++pub enum StagingBuffer {
++    /// An anonymous temporary file.
++    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++    File(std::fs::File),
++    /// An in-memory buffer.
++    Memory(Cursor<Vec<u8>>),
++}
++
++/// Opens scratch storage suited to the target.
++///
++/// # Errors
++///
++/// Returns the I/O error from creating the temporary file on native targets.
++pub fn staging_buffer() -> io::Result<StagingBuffer> {
++    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++    {
++        tempfile::tempfile().map(StagingBuffer::File)
++    }
++    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++    {
++        Ok(StagingBuffer::Memory(Cursor::new(Vec::new())))
++    }
++}
++
++impl Read for StagingBuffer {
++    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++        match self {
++            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++            Self::File(file) => file.read(buf),
++            Self::Memory(cursor) => cursor.read(buf),
++        }
++    }
++}
++
++impl Write for StagingBuffer {
++    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++        match self {
++            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++            Self::File(file) => file.write(buf),
++            Self::Memory(cursor) => cursor.write(buf),
++        }
++    }
++
++    fn flush(&mut self) -> io::Result<()> {
++        match self {
++            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++            Self::File(file) => file.flush(),
++            Self::Memory(cursor) => cursor.flush(),
++        }
++    }
++}
++
++impl Seek for StagingBuffer {
++    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
++        match self {
++            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++            Self::File(file) => file.seek(pos),
++            Self::Memory(cursor) => cursor.seek(pos),
++        }
++    }
++}
++
++#[cfg(test)]
++#[allow(clippy::unwrap_used)]
++mod tests {
++    use super::{staging_buffer, StagingBuffer};
++    use std::io::{Cursor, Read, Seek, SeekFrom, Write};
++
++    fn round_trip(mut staged: StagingBuffer) {
++        staged.write_all(b"cadmpeg").unwrap();
++        staged.seek(SeekFrom::Start(3)).unwrap();
++        staged.write_all(b"P").unwrap();
++        staged.flush().unwrap();
++        staged.seek(SeekFrom::Start(0)).unwrap();
++        let mut read = String::new();
++        staged.read_to_string(&mut read).unwrap();
++        assert_eq!(read, "cadPpeg");
++    }
++
++    #[test]
++    fn target_staging_round_trips() {
++        round_trip(staging_buffer().unwrap());
++    }
++
++    #[test]
++    fn memory_staging_round_trips() {
++        round_trip(StagingBuffer::Memory(Cursor::new(Vec::new())));
++    }
++}

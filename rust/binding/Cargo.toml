@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "cadmpeg-binding"
+description = "Bytes-in, bytes-out conversion over the cadmpeg registry."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["all"]
+# One feature per upstream codec, named as the registry names it (charter Q20).
+fcstd = ["cadmpeg-registry/fcstd"]
+f3d = ["cadmpeg-registry/f3d"]
+inventor = ["cadmpeg-registry/inventor"]
+sldprt = ["cadmpeg-registry/sldprt"]
+catia = ["cadmpeg-registry/catia"]
+creo = ["cadmpeg-registry/creo"]
+nx = ["cadmpeg-registry/nx"]
+rhino = ["cadmpeg-registry/rhino"]
+step = ["cadmpeg-registry/step"]
+iges = ["cadmpeg-registry/iges"]
+sat = ["cadmpeg-registry/sat"]
+pvz = ["cadmpeg-registry/pvz"]
+usd = ["cadmpeg-registry/usd"]
+all = [
+  "fcstd",
+  "f3d",
+  "inventor",
+  "sldprt",
+  "catia",
+  "creo",
+  "nx",
+  "rhino",
+  "step",
+  "iges",
+  "sat",
+  "pvz",
+  "usd",
+]
+
+[dependencies]
+cadmpeg-container.workspace = true
+cadmpeg-core.workspace = true
+cadmpeg-ir.workspace = true
+cadmpeg-registry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

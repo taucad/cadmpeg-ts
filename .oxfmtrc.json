@@ -1,0 +1,16 @@
+{
+  "ignorePatterns": [
+    ".ci-tools/**",
+    "dist/**",
+    "npm/**",
+    "patches/**",
+    "rust/target/**",
+    "src/native/**",
+    "src/wasm/**",
+    "tests/fixtures/**",
+    "tests/out/**",
+    "upstream/**"
+  ],
+  "printWidth": 110,
+  "singleQuote": true
+}

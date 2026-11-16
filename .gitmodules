@@ -1,0 +1,3 @@
+[submodule "upstream/cadmpeg"]
+	path = upstream/cadmpeg
+	url = https://github.com/cadmpeg/cadmpeg

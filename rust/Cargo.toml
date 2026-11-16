@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+[workspace]
+resolver = "2"
+members = ["binding", "binding-napi", "binding-wasm"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.97"
+
+# The engine is the pinned upstream release under `upstream/cadmpeg`, with
+# `patches/` applied by `scripts/apply-patches.mjs`. Path dependencies keep the
+# upstream crates inside their own workspace, so their inherited settings and
+# lints are upstream's, not ours.
+[workspace.dependencies]
+cadmpeg-binding = { path = "binding", default-features = false }
+cadmpeg-container = { path = "../upstream/cadmpeg/crates/cadmpeg-container" }
+cadmpeg-core = { path = "../upstream/cadmpeg/crates/cadmpeg-core" }
+cadmpeg-ir = { path = "../upstream/cadmpeg/crates/cadmpeg-ir" }
+cadmpeg-registry = { path = "../upstream/cadmpeg/crates/cadmpeg-registry", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unreachable_pub = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+as_conversions = "deny"
+
+# Speed first, then size (charter Q11). opt-level 3 with fat LTO and one
+# codegen unit is the measured speed profile; overflow checks stay on because
+# the codecs parse untrusted files (charter I4, matching upstream's release).
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+overflow-checks = true
+strip = "debuginfo"
+
+# The WASM modules abort on panic: there is no unwinding on
+# wasm32-unknown-unknown, and the JavaScript shell reports the trap.
+[profile.wasm]
+inherits = "release"
+panic = "abort"
+
+# The corpus tests spend their time in the codecs; upstream's dev profile
+# optimizes dependencies for the same reason. Debug info for the whole codec
+# graph runs to gigabytes and no test needs it.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
