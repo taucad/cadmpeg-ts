@@ -1,0 +1,15 @@
+.DS_Store
+.ci-tools/
+.nx/*
+!.nx/version-plans/
+!.nx/version-plans/*.md
+coverage/
+dist/
+node_modules/
+*.tsbuildinfo
+*.node
+npm/
+rust/target/
+src/native/
+src/wasm/
+tests/out/
