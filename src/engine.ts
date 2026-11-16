@@ -12,7 +12,7 @@ export type Severity = 'info' | 'warning' | 'error';
 export type Loss = {
   /** The phase that reported the loss. */
   readonly phase: Phase;
-  /** cadmpeg's stable `family.detail` loss code. */
+  /** cadmpeg's stable `namespace/code` loss code, such as `shared/pcurve_omitted`. */
   readonly code: string;
   /** How serious the loss is. */
   readonly severity: Severity;

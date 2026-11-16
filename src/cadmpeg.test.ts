@@ -19,7 +19,12 @@ const fakeEngine = (losses: EngineReport['losses'] = []) => {
   return { engine, convert };
 };
 
-const loss = { phase: 'export', code: 'geometry.approximated', severity: 'warning', message: 'm' } as const;
+const loss = {
+  phase: 'export',
+  code: 'shared/approximated_geometry',
+  severity: 'warning',
+  message: 'm',
+} as const;
 
 describe('convert', () => {
   it('returns named files, losses, notes, timings and the backend', async () => {

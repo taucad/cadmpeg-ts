@@ -335,9 +335,14 @@ jobs:
           # release line, so a 15.0 guest must accept the recorded version skew.
           export IGNORE_OSVERSION=yes
           export RUSTUP_IO_THREADS=1
-          # Four parallel rustc processes on the largest codec crates exceed the
-          # guest's 12 GB at one codegen unit each.
-          export CARGO_BUILD_JOBS=2
+          # A single codec crate at one codegen unit peaks above 8 GB in rustc,
+          # so the guest builds one crate at a time, with swap for the peak.
+          export CARGO_BUILD_JOBS=1
+          sudo dd if=/dev/zero of=/usr/swap0 bs=1m count=8192 status=none
+          sudo chmod 600 /usr/swap0
+          swap_device="$(sudo mdconfig -a -t vnode -f /usr/swap0)"
+          sudo swapon "/dev/${swap_device}"
+          swapinfo -h
           sudo -E pkg install --yes node22 npm-node22 curl
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain none

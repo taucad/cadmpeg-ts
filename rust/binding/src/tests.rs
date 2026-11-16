@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::{capabilities, convert, detect, ErrorCode, Phase};
 
-const CORPUS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../upstream/cadmpeg/corpus/");
+const CORPUS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../upstream/cadmpeg/corpus/"
+);
 
 fn corpus(path: &str) -> Vec<u8> {
     std::fs::read(format!("{CORPUS}{path}")).expect("corpus file")
@@ -10,12 +13,24 @@ fn corpus(path: &str) -> Vec<u8> {
 /// One native file per readable codec the upstream corpus carries.
 const NATIVE: &[(&str, &str)] = &[
     ("nist-pmi/step/nist_ctc_01_asme1_ap242-e1.stp", "step"),
-    ("nist-pmi/sldprt/nist_ftc_06_asme1_rd_sw1802.SLDPRT", "sldprt"),
-    ("nist-pmi/catia/nist_ftc_07_asme1_rd_ct5290_ra.CATPart", "catia"),
+    (
+        "nist-pmi/sldprt/nist_ftc_06_asme1_rd_sw1802.SLDPRT",
+        "sldprt",
+    ),
+    (
+        "nist-pmi/catia/nist_ftc_07_asme1_rd_ct5290_ra.CATPart",
+        "catia",
+    ),
     ("nist-pmi/nx/nist_ctc_03_asme1_nx1980_rc.prt", "nx"),
     ("nist-pmi/creo/nist_ctc_01_asme1_rd_cr10030.prt.5", "creo"),
-    ("nist-pmi/inventor/INV_nist_ctc_01_asme1_2021.ipt", "inventor"),
-    ("freecad_fcstd/fixtures/named_constraint_1.0.2_P12a.FCStd", "fcstd"),
+    (
+        "nist-pmi/inventor/INV_nist_ctc_01_asme1_2021.ipt",
+        "inventor",
+    ),
+    (
+        "freecad_fcstd/fixtures/named_constraint_1.0.2_P12a.FCStd",
+        "fcstd",
+    ),
     ("1WireRGBWController.f3d", "f3d"),
 ];
 
@@ -24,12 +39,16 @@ fn capabilities_list_every_codec_and_writer() {
     let capabilities = capabilities();
     assert_eq!(capabilities.engine, super::ENGINE_VERSION);
     let inputs: Vec<&str> = capabilities.inputs.iter().map(|f| f.id.as_str()).collect();
-    for id in ["step", "sldprt", "catia", "nx", "creo", "inventor", "fcstd", "f3d", "iges", "rhino"] {
+    for id in [
+        "step", "sldprt", "catia", "nx", "creo", "inventor", "fcstd", "f3d", "iges", "rhino",
+    ] {
         assert!(inputs.contains(&id), "missing input {id}: {inputs:?}");
     }
     assert!(capabilities.inputs.iter().all(|f| !f.extensions.is_empty()));
     let outputs: Vec<&str> = capabilities.outputs.iter().map(|f| f.id.as_str()).collect();
-    for id in ["cadir", "step", "iges", "fcstd", "f3d", "sldprt", "rhino", "usd"] {
+    for id in [
+        "cadir", "step", "iges", "fcstd", "f3d", "sldprt", "rhino", "usd",
+    ] {
         assert!(outputs.contains(&id), "missing output {id}: {outputs:?}");
     }
 }
@@ -59,11 +78,21 @@ fn converts_every_corpus_format_to_step_deterministically() {
 #[test]
 fn writes_every_native_writer_from_step() {
     let input = corpus("nist-pmi/step/nist_ctc_01_asme1_ap242-e1.stp");
-    for to in ["iges", "fcstd", "f3d", "sldprt", "rhino", "usd", "cadir"] {
+    for to in ["fcstd", "f3d", "sldprt", "rhino", "usd", "cadir"] {
         let conversion = convert(&input, to).unwrap_or_else(|e| panic!("{to}: {e}"));
         assert!(!conversion.bytes.is_empty(), "{to}");
         assert_eq!(conversion.report.to, to);
     }
+}
+
+#[test]
+fn refuses_what_the_iges_writer_cannot_encode_with_a_code() {
+    // cadmpeg's IGES writer does not encode AP242 product definitions yet;
+    // the binding reports that as an unsupported export, not a panic.
+    let input = corpus("nist-pmi/step/nist_ctc_01_asme1_ap242-e1.stp");
+    let error = convert(&input, "iges").expect_err("iges");
+    assert_eq!(error.code, ErrorCode::UnsupportedFormat);
+    assert_eq!(error.phase, Some(Phase::Export));
 }
 
 #[test]
@@ -82,7 +111,10 @@ fn reports_losses_with_their_phase() {
     let json = serde_json::to_value(&conversion.report).expect("report json");
     for loss in json["losses"].as_array().expect("losses") {
         assert!(matches!(loss["phase"].as_str(), Some("decode" | "export")));
-        assert!(loss["code"].is_string());
+        assert!(
+            loss["code"].as_str().is_some_and(|code| code.contains('/')),
+            "{loss}"
+        );
         assert!(loss["message"].is_string());
     }
 }
@@ -119,9 +151,18 @@ fn refuses_with_stable_codes() {
 #[test]
 fn truncated_native_input_fails_to_import() {
     let input = corpus("nist-pmi/sldprt/nist_ftc_06_asme1_rd_sw1802.SLDPRT");
-    let error = convert(&input[..input.len() / 3], "step").expect_err("truncated");
+    let error = convert(&input[..64], "step").expect_err("truncated");
     assert!(
-        matches!(error.code, ErrorCode::ImportFailed | ErrorCode::UnsupportedFormat),
+        matches!(
+            error.code,
+            ErrorCode::ImportFailed | ErrorCode::UnsupportedFormat
+        ),
         "{error:?}"
     );
+    // cadmpeg salvages what a partial SLDPRT still holds; the result is
+    // either a coded failure or STEP, never a panic.
+    match convert(&input[..input.len() / 3], "step") {
+        Ok(conversion) => assert!(conversion.bytes.starts_with(b"ISO-10303-21;")),
+        Err(error) => assert_eq!(error.phase, Some(Phase::Decode), "{error:?}"),
+    }
 }

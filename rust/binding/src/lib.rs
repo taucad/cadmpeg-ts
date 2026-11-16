@@ -94,13 +94,38 @@ impl std::fmt::Display for BindingError {
 impl std::error::Error for BindingError {}
 
 /// One loss cadmpeg reported, tagged with the phase that reported it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+///
+/// It serializes flat, with `code` as the `namespace/code` string cadmpeg
+/// prints, such as `shared/pcurve_omitted`, rather than cadmpeg's tagged
+/// object.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Loss {
     /// The phase that reported the loss.
     pub phase: Phase,
     /// cadmpeg's loss note: `code`, `severity`, `message`, `provenance`.
-    #[serde(flatten)]
     pub note: LossNote,
+}
+
+impl Serialize for Loss {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            phase: Phase,
+            code: String,
+            severity: &'a cadmpeg_ir::report::Severity,
+            message: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            provenance: Option<&'a cadmpeg_ir::SourceProvenance>,
+        }
+        Wire {
+            phase: self.phase,
+            code: self.note.code.to_string(),
+            severity: &self.note.severity,
+            message: &self.note.message,
+            provenance: self.note.provenance.as_ref(),
+        }
+        .serialize(serializer)
+    }
 }
 
 /// What a conversion transferred and lost.
@@ -255,12 +280,9 @@ fn decode(input: &[u8], options: &DecodeOptions) -> Result<Decoded, BindingError
     let arena = DecodeArena::new();
     let ctx = DecodeContext::new(&arena, &options.policy, options.depth);
     let mut source = Cursor::new(input);
-    let mut prefix = cadmpeg_container::compound::read_detection_prefix(
-        &ctx,
-        &mut source,
-        DETECTION_PREFIX_LEN,
-    )
-    .map_err(|error| decode_error(&error))?;
+    let mut prefix =
+        cadmpeg_container::compound::read_detection_prefix(&ctx, &mut source, DETECTION_PREFIX_LEN)
+            .map_err(|error| decode_error(&error))?;
     let resolved = catalog
         .resolve_seekable_source(&ctx, View::over_retained(&prefix), &mut source, None)
         .map_err(|error| match error {
@@ -280,11 +302,9 @@ fn decode(input: &[u8], options: &DecodeOptions) -> Result<Decoded, BindingError
             ctx.finish_session().map_err(|error| decode_error(&error))?;
             let result = result.map_err(|failure| match failure {
                 DecodeFailure::Codec(error) => decode_error(&error),
-                failure => BindingError::new(
-                    ErrorCode::Refused,
-                    Some(Phase::Decode),
-                    failure.to_string(),
-                ),
+                failure => {
+                    BindingError::new(ErrorCode::Refused, Some(Phase::Decode), failure.to_string())
+                }
             })?;
             let (ir, report, fidelity) = result.into_parts();
             Ok(Decoded {
@@ -332,16 +352,24 @@ fn decode(input: &[u8], options: &DecodeOptions) -> Result<Decoded, BindingError
 /// Identifies the input format from the file's leading bytes.
 ///
 /// Returns `None` when no codec in this build recognizes the bytes. A prefix
-/// of [`DETECTION_PREFIX_LEN`] bytes is enough for every built-in codec.
+/// of [`DETECTION_PREFIX_LEN`] bytes is enough for every built-in codec
+/// except a compound file, whose detection reads its directory sectors.
 #[must_use]
 pub fn detect(input: &[u8]) -> Option<String> {
     let catalog = InputCatalog::with_builtins();
     let options = DecodeOptions::default();
     let arena = DecodeArena::new();
     let ctx = DecodeContext::new(&arena, &options.policy, options.depth);
-    let prefix = &input[..input.len().min(DETECTION_PREFIX_LEN)];
     let mut source = Cursor::new(input);
-    match catalog.resolve_seekable_source(&ctx, View::over_retained(prefix), &mut source, None) {
+    // A compound (CFB) file's prefix grows until its directory settles, as
+    // `decode` reads it; a fixed slice misses Inventor's streams.
+    let Ok(prefix) =
+        cadmpeg_container::compound::read_detection_prefix(&ctx, &mut source, DETECTION_PREFIX_LEN)
+    else {
+        return None;
+    };
+    source.set_position(0);
+    match catalog.resolve_seekable_source(&ctx, View::over_retained(&prefix), &mut source, None) {
         Ok(ResolvedSource::Native { codec, .. }) => Some(codec.id().as_str().to_owned()),
         Ok(ResolvedSource::Cadir) => Some(String::from("cadir")),
         Ok(ResolvedSource::Unrecognized) | Err(_) => None,

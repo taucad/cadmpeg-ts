@@ -26,7 +26,7 @@ const fakeGlue = (id: ModuleId, options: FakeOptions = {}) => {
         report: JSON.stringify({
           from,
           to: to.split(':')[0],
-          losses: [{ phase: 'decode', code: `${id}.loss`, severity: 'warning', message: 'm' }],
+          losses: [{ phase: 'decode', code: `${id}/loss`, severity: 'warning', message: 'm' }],
           notes: [`${id} note`],
         }),
         free: freed,
@@ -77,8 +77,8 @@ describe('createWasmEngine', () => {
       from: 'sldprt',
       to: 'rhino',
       losses: [
-        { phase: 'decode', code: 'sldprt.loss', severity: 'warning', message: 'm' },
-        { phase: 'decode', code: 'rhino.loss', severity: 'warning', message: 'm' },
+        { phase: 'decode', code: 'sldprt/loss', severity: 'warning', message: 'm' },
+        { phase: 'decode', code: 'rhino/loss', severity: 'warning', message: 'm' },
       ],
       notes: ['sldprt note', 'rhino note'],
     });
