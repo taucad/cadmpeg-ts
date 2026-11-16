@@ -339,6 +339,10 @@ jobs:
           # so the guest builds one crate at a time. Its disk has no room for
           # swap; the host's swap backs the guest's memory instead.
           export CARGO_BUILD_JOBS=1
+          # The addon's fat-LTO link over every codec still exceeds the guest
+          # intermittently; thin LTO keeps cross-crate inlining at a fraction
+          # of the memory. Only this row relaxes it.
+          export CARGO_PROFILE_RELEASE_LTO=thin
           sudo -E pkg install --yes node22 npm-node22 curl
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain none
