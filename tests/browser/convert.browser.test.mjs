@@ -38,14 +38,12 @@ test('converts SOLIDWORKS to STEP through the sldprt module, deterministically',
 });
 
 test('routes a native-to-native conversion through STEP', async () => {
-  const [iges, rhino] = await convertFormats(
-    { name: 'ftc06.SLDPRT', bytes: sldprt },
-    { targets: [{ to: 'iges' }, { to: 'rhino' }] },
-  );
-  expect(iges.to).toBe('iges');
-  expect(iges.files[0].name).toBe('ftc06.iges');
-  expect(rhino.to).toBe('rhino');
-  expect(rhino.files[0].name).toBe('ftc06.3dm');
+  // cadmpeg's IGES and Rhino writers refuse a model that carries features or
+  // PMI, so the native-to-native route is checked with OpenUSD.
+  const [usd] = await convertFormats({ name: 'ftc06.SLDPRT', bytes: sldprt }, { targets: [{ to: 'usd' }] });
+  expect(usd.to).toBe('usd');
+  expect(usd.files[0].name).toBe('ftc06.usda');
+  expect(new TextDecoder().decode(usd.files[0].bytes.subarray(0, 5))).toBe('#usda');
 });
 
 test('rejects with stable codes', async () => {

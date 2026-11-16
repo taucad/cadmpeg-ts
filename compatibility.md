@@ -48,9 +48,22 @@ A `.prt` file goes to whichever of the Creo and NX detectors recognizes it.
 
 Writing: STEP, IGES and CADIR are stable. FreeCAD, Fusion 360, SolidWorks,
 Rhino and OpenUSD writers are experimental in cadmpeg itself and are reported
-as `experimental: true` in `outputs`. Every conversion returns the losses
-cadmpeg records; pass `strict: true` to refuse a lossy one.
+as `experimental: true` in `outputs`.
+
+cadmpeg refuses a write it cannot make faithfully rather than dropping data.
+With the pinned engine:
+
+- STEP, OpenUSD and CADIR take any model.
+- IGES, Rhino, Fusion 360 and SolidWorks refuse a model that carries data they
+  cannot encode yet, such as features, PMI, appearances or AP242 product
+  definitions, with `UNSUPPORTED_FORMAT`. Most real parts carry some of it.
+- SolidWorks rewrites a SolidWorks file.
+- FreeCAD only rewrites a FreeCAD document; from any other format it refuses
+  with `REFUSED`.
+
+Every conversion returns the losses cadmpeg records; pass `strict: true` to
+refuse a lossy one.
 
 The `rust` job runs the binding's corpus tests on the pinned engine. The
-`browser` job converts STEP, SolidWorks, and a native-to-native pair through
+`browser` job converts STEP, SolidWorks, and SolidWorks to OpenUSD through
 the published modules.

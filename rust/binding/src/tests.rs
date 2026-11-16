@@ -76,22 +76,37 @@ fn converts_every_corpus_format_to_step_deterministically() {
 }
 
 #[test]
-fn writes_every_native_writer_from_step() {
-    let input = corpus("nist-pmi/step/nist_ctc_01_asme1_ap242-e1.stp");
-    for to in ["fcstd", "f3d", "sldprt", "rhino", "usd", "cadir"] {
-        let conversion = convert(&input, to).unwrap_or_else(|e| panic!("{to}: {e}"));
+fn writes_what_each_writer_can_encode() {
+    // cadmpeg 0.6.12's IGES, Rhino, Fusion 360 and SolidWorks writers refuse a
+    // model that carries arenas they cannot encode yet (features, PMI,
+    // appearances, product definitions); OpenUSD and CADIR take any model, and
+    // SolidWorks rewrites its own format.
+    let step = corpus("nist-pmi/step/nist_ctc_01_asme1_ap242-e1.stp");
+    let sldprt = corpus("nist-pmi/sldprt/nist_ftc_06_asme1_rd_sw1802.SLDPRT");
+    for (input, to) in [
+        (&step, "usd"),
+        (&step, "cadir"),
+        (&sldprt, "usd"),
+        (&sldprt, "sldprt"),
+    ] {
+        let conversion = convert(input, to).unwrap_or_else(|e| panic!("{to}: {e}"));
         assert!(!conversion.bytes.is_empty(), "{to}");
         assert_eq!(conversion.report.to, to);
+    }
+    for to in ["iges", "rhino", "f3d", "sldprt"] {
+        let error = convert(&step, to).expect_err(to);
+        assert_eq!(error.code, ErrorCode::UnsupportedFormat, "{to}: {error:?}");
+        assert_eq!(error.phase, Some(Phase::Export), "{to}");
     }
 }
 
 #[test]
-fn refuses_what_the_iges_writer_cannot_encode_with_a_code() {
-    // cadmpeg's IGES writer does not encode AP242 product definitions yet;
-    // the binding reports that as an unsupported export, not a panic.
+fn refuses_freecad_from_another_format() {
+    // cadmpeg's FreeCAD writer only rewrites a FreeCAD document: it declares
+    // no cross-format default target.
     let input = corpus("nist-pmi/step/nist_ctc_01_asme1_ap242-e1.stp");
-    let error = convert(&input, "iges").expect_err("iges");
-    assert_eq!(error.code, ErrorCode::UnsupportedFormat);
+    let error = convert(&input, "fcstd").expect_err("fcstd");
+    assert_eq!(error.code, ErrorCode::Refused, "{error:?}");
     assert_eq!(error.phase, Some(Phase::Export));
 }
 
