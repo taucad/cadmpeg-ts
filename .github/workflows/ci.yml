@@ -283,8 +283,9 @@ jobs:
             echo 'CARGO_PROFILE_RELEASE_LTO=false'
             echo 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32'
           } >> "$GITHUB_ENV"
+      # On the host for every row: the FreeBSD VM has no git, and it receives
+      # the already-patched tree when it syncs the workspace.
       - name: Apply the upstream patch queue
-        if: matrix.target != 'x86_64-unknown-freebsd'
         run: node scripts/apply-patches.mjs
       - name: Build the addon
         if: matrix.target != 'x86_64-unknown-freebsd'
@@ -318,7 +319,6 @@ jobs:
           # The virtual machine only runs the NAPI-RS build, and Playwright's
           # install script has no FreeBSD download.
           pnpm install --frozen-lockfile --ignore-scripts
-          node scripts/apply-patches.mjs
           pnpm exec napi build --platform --release --esm --js index.js --dts index.d.ts \
             --output-dir src/native --manifest-path rust/binding-napi/Cargo.toml \
             --target x86_64-unknown-freebsd -- --locked
