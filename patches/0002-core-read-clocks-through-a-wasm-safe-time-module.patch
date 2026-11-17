@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tau <noreply@tau.new>
+Date: Mon, 16 Nov 2026 16:04:10 +0000
+Subject: [PATCH 2/2] core: read clocks through a wasm-safe time module
+
+On wasm32-unknown-unknown std::time::Instant::now() and
+SystemTime::now() panic: the target has no clock. The Fusion history
+observers time their passes and the IGES writer stamps the file with
+the current time, so a conversion that reaches either panics in the
+browser. Add cadmpeg_core::time with Stopwatch, whose elapsed time is
+zero where no clock exists, and system_now(), which returns the Unix
+epoch there, and route the three call sites through it. Native
+behaviour is unchanged.
+---
+ crates/cadmpeg-codec-f3d/src/f3z/observer.rs  |  6 +-
+ .../cadmpeg-codec-f3d/src/history/binding.rs  |  4 +-
+ crates/cadmpeg-codec-iges/src/writer.rs       |  2 +-
+ crates/cadmpeg-core/src/lib.rs                |  1 +
+ crates/cadmpeg-core/src/time.rs               | 71 +++++++++++++++++++
+ 5 files changed, 78 insertions(+), 6 deletions(-)
+ create mode 100644 crates/cadmpeg-core/src/time.rs
+
+diff --git a/crates/cadmpeg-codec-f3d/src/f3z/observer.rs b/crates/cadmpeg-codec-f3d/src/f3z/observer.rs
+index fd64e0aaf..56f3509b5 100644
+--- a/crates/cadmpeg-codec-f3d/src/f3z/observer.rs
++++ b/crates/cadmpeg-codec-f3d/src/f3z/observer.rs
+@@ -9,7 +9,7 @@
+ 
+ use std::cell::RefCell;
+ use std::rc::Rc;
+-use std::time::{Duration, Instant};
++use std::time::Duration;
+ 
+ use crate::container::ContainerScan;
+ use cadmpeg_core::decode::{DecodeContext, View};
+@@ -127,7 +127,7 @@ pub(super) struct ClassifyTiming {
+ }
+ 
+ pub(super) fn timed<T>(duration: &mut Duration, work: impl FnOnce() -> T) -> T {
+-    let start = Instant::now();
++    let start = cadmpeg_core::time::Stopwatch::start();
+     let result = work();
+     *duration += start.elapsed();
+     result
+@@ -135,7 +135,7 @@ pub(super) fn timed<T>(duration: &mut Duration, work: impl FnOnce() -> T) -> T {
+ 
+ pub(super) fn classifying<T>(path: &str, work: impl FnOnce(&mut ClassifyTiming) -> T) -> T {
+     let observer = OBSERVER.with(|slot| slot.borrow().clone());
+-    let start = Instant::now();
++    let start = cadmpeg_core::time::Stopwatch::start();
+     let mut timing = ClassifyTiming::default();
+     let result = work(&mut timing);
+     if let Some(observer) = observer {
+diff --git a/crates/cadmpeg-codec-f3d/src/history/binding.rs b/crates/cadmpeg-codec-f3d/src/history/binding.rs
+index e97566786..f98c07923 100644
+--- a/crates/cadmpeg-codec-f3d/src/history/binding.rs
++++ b/crates/cadmpeg-codec-f3d/src/history/binding.rs
+@@ -11,7 +11,7 @@ use cadmpeg_asm::kernel_header::RefWidth;
+ use cadmpeg_asm::sab::{Record, Token};
+ use cadmpeg_core::decode::{work_units, WorkBudget};
+ use std::collections::{BTreeMap, BTreeSet, HashMap};
+-use std::time::{Duration, Instant};
++use std::time::Duration;
+ 
+ mod indexed;
+ pub(crate) mod transition_geometry;
+@@ -41,7 +41,7 @@ pub(crate) fn bind(
+     width: RefWidth,
+     work: &WorkBudget,
+ ) -> Result<Statistics, cadmpeg_core::CodecError> {
+-    let started = Instant::now();
++    let started = cadmpeg_core::time::Stopwatch::start();
+     let mut stats = Statistics::default();
+     let Some(archive) = decode_record_archive(ctx, states, bytes, width)? else {
+         return Ok(stats);
+diff --git a/crates/cadmpeg-codec-iges/src/writer.rs b/crates/cadmpeg-codec-iges/src/writer.rs
+index 382bec47f..3fa7e9a06 100644
+--- a/crates/cadmpeg-codec-iges/src/writer.rs
++++ b/crates/cadmpeg-codec-iges/src/writer.rs
+@@ -8117,7 +8117,7 @@ fn encode_file(
+     version: crate::IgesVersion,
+     minimum_resolution: f64,
+ ) -> Result<Vec<u8>, CodecError> {
+-    let generation_timestamp = generation_timestamp(SystemTime::now(), version)?;
++    let generation_timestamp = generation_timestamp(cadmpeg_core::time::system_now(), version)?;
+     let maximum_coordinate = generated_maximum_coordinate(entities);
+     let global = generated_global(
+         version,
+diff --git a/crates/cadmpeg-core/src/lib.rs b/crates/cadmpeg-core/src/lib.rs
+index 2a5dae2f3..1353b7c79 100644
+--- a/crates/cadmpeg-core/src/lib.rs
++++ b/crates/cadmpeg-core/src/lib.rs
+@@ -14,6 +14,7 @@ pub mod iter_wire;
+ pub mod printable;
+ pub mod target;
+ pub mod text;
++pub mod time;
+ 
+ pub use container::ContainerEntry;
+ pub use error::CodecError;
+diff --git a/crates/cadmpeg-core/src/time.rs b/crates/cadmpeg-core/src/time.rs
+new file mode 100644
+index 000000000..44116a1b6
+--- /dev/null
++++ b/crates/cadmpeg-core/src/time.rs
+@@ -0,0 +1,71 @@
++// SPDX-License-Identifier: Apache-2.0
++//! Clocks that degrade instead of panicking on targets without one.
++//!
++//! On `wasm32-unknown-unknown` the standard library's `Instant::now` and
++//! `SystemTime::now` panic ("time not implemented on this platform"). Decode
++//! timings there read as zero and generated timestamps fall back to the Unix
++//! epoch, so the same decoders and writers run in a browser.
++
++use std::time::{Duration, SystemTime};
++
++/// Measures elapsed wall time for diagnostics.
++#[derive(Debug, Clone, Copy)]
++pub struct Stopwatch {
++    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++    started: std::time::Instant,
++}
++
++impl Stopwatch {
++    /// Starts measuring.
++    #[must_use]
++    pub fn start() -> Self {
++        Self {
++            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++            started: std::time::Instant::now(),
++        }
++    }
++
++    /// Time since [`Stopwatch::start`]; zero where the target has no clock.
++    #[must_use]
++    pub fn elapsed(&self) -> Duration {
++        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++        {
++            self.started.elapsed()
++        }
++        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++        {
++            Duration::ZERO
++        }
++    }
++}
++
++/// The current system time; the Unix epoch where the target has no clock.
++#[must_use]
++pub fn system_now() -> SystemTime {
++    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++    {
++        SystemTime::now()
++    }
++    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
++    {
++        SystemTime::UNIX_EPOCH
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{system_now, Stopwatch};
++    use std::time::SystemTime;
++
++    #[test]
++    fn stopwatch_is_monotonic() {
++        let watch = Stopwatch::start();
++        let first = watch.elapsed();
++        assert!(watch.elapsed() >= first);
++    }
++
++    #[test]
++    fn system_now_is_after_the_epoch_natively() {
++        assert!(system_now() > SystemTime::UNIX_EPOCH);
++    }
++}

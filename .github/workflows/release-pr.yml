@@ -1,0 +1,188 @@
+# Maintains the standing release pull request (head `release/next`, base `main`).
+#
+# On every push to `main` with pending Version Plans:
+#   1. Regenerate the release commit with `release:prepare --from-plans` — the
+#      plans dictate the version, and the same validations gate it as a manual
+#      `release:prepare -- <version>` run.
+#   2. Delete every consumed plan file explicitly: nx has left consumed plans
+#      on disk before (v0.3.0), and a survivor would re-trigger this workflow
+#      for a version that just shipped.
+#   3. Force-push `release/next` and upsert one pull request titled with the
+#      exact release subject, so a squash merge lands a commit `ci.yml`'s
+#      release policy accepts (the subject regex tolerates the ` (#N)` suffix).
+#
+# With no pending plans (a release just merged, or plans were reverted), close
+# the pull request and delete the branch instead.
+#
+# Merging the pull request is the entire release act: the push to `main`
+# carries the release subject, and `ci.yml` owns publication, provenance,
+# registry verification, tags, and GitHub Releases — nothing here touches npm.
+#
+# Modelled on tau's `prepare-prod-release.yml`: a minted `tau-release-bot`
+# installation token, because pushes made with the default GITHUB_TOKEN
+# trigger no CI (the required `ci-gate` check would never report) and the org
+# does not allow Actions to create pull requests.
+name: Release PR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+          persist-credentials: true
+          token: ${{ steps.bot.outputs.token }}
+
+      - name: Check pending Version Plans
+        id: plans
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          set -euo pipefail
+          if compgen -G '.nx/version-plans/*.md' > /dev/null; then
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "pending=false" >> "$GITHUB_OUTPUT"
+          pr_number=$(gh pr list --base main --head release/next --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr_number" ]; then
+            gh pr close "$pr_number" --comment "No Version Plans are pending on \`main\`, so there is nothing to release." --delete-branch
+          else
+            git push origin --delete release/next 2>/dev/null || true
+          fi
+
+      - name: Setup repository
+        if: steps.plans.outputs.pending == 'true'
+        uses: ./.github/actions/setup
+        with:
+          node-version: '26'
+
+      - name: Generate the release commit
+        id: generate
+        if: steps.plans.outputs.pending == 'true'
+        run: |
+          set -euo pipefail
+          previous_version=$(node -p "require('./package.json').version")
+          # A plan states its bump under the project key or under nx's
+          # `__default__` wildcard, and both forms are in this repository's
+          # history. The list is read by nobody but the pull request body —
+          # `nx` reads the plans themselves — so a plan that states its bump
+          # some third way must not take the release down with it. Matching
+          # nothing exits `grep` non-zero, which under `pipefail` would abort
+          # this block between the delimiter above and the one below, and the
+          # step would fail reporting the unterminated delimiter rather than
+          # the plan it could not read.
+          {
+            echo 'plans<<PLANSEOF'
+            grep -HE '^(cadmpeg-ts|__default__):' .nx/version-plans/*.md | sed 's/^/- /' ||
+              echo '- (no bump line matched; see the consumed plan files in this pull request)'
+            echo 'PLANSEOF'
+          } >> "$GITHUB_OUTPUT"
+
+          pnpm release:prepare -- --from-plans
+
+          # nx has left consumed plan files on disk before; every plan affects
+          # the root package, so every plan is consumed by every release.
+          git rm --quiet --force '.nx/version-plans/*.md'
+
+          # Stage the release files explicitly, so nothing the quality gate
+          # inside release:prepare leaves behind enters the release commit. A root version bump rewrites
+          # only the changelog and the root manifest — the platform packages are
+          # generated during release assembly, and the lockfile records no
+          # importer version, so neither appears here.
+          git add CHANGELOG.md package.json
+          staged=$(git diff --cached --name-only)
+          allowed='^(CHANGELOG\.md|package\.json|\.nx/version-plans/.+\.md)$'
+          unexpected=$(grep -Ev "$allowed" <<< "$staged" || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::release generation changed unexpected files: $unexpected"
+            exit 1
+          fi
+
+          version=$(node -p "require('./package.json').version")
+          git config user.name "tau-release-bot[bot]"
+          git config user.email "tau-release-bot[bot]@users.noreply.github.com"
+          git commit --quiet -m "chore(release): cadmpeg-ts v$version"
+          git push --force origin HEAD:refs/heads/release/next
+
+          # A version can be present in main's manifest without a published tag
+          # when its release CI failed. List commits from the latest actual tag.
+          published_tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' main)
+          {
+            echo "version=$version"
+            echo "previous_version=$previous_version"
+            echo "published_tag=$published_tag"
+            echo 'commit_log<<LOGEOF'
+            git log "$published_tag..main" --pretty='- %h %s' | head -100
+            echo 'LOGEOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upsert the release pull request
+        if: steps.plans.outputs.pending == 'true'
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          TITLE: 'chore(release): cadmpeg-ts v${{ steps.generate.outputs.version }}'
+          VERSION: ${{ steps.generate.outputs.version }}
+          PREVIOUS_VERSION: ${{ steps.generate.outputs.previous_version }}
+          PUBLISHED_TAG: ${{ steps.generate.outputs.published_tag }}
+          PLANS: ${{ steps.generate.outputs.plans }}
+          COMMIT_LOG: ${{ steps.generate.outputs.commit_log }}
+        run: |
+          set -euo pipefail
+          body=$(cat <<BODYEOF
+          Releases cadmpeg-ts **v${VERSION}** (from manifest v${PREVIOUS_VERSION};
+          latest published tag ${PUBLISHED_TAG}). This is one root
+          release; CI materializes the seventeen registry packages — the root package and its
+          sixteen native platform packages — at this version. The consumed Version Plans
+          dictate the bump:
+
+          ${PLANS}
+
+          Commits since ${PUBLISHED_TAG} (the latest published tag):
+
+          ${COMMIT_LOG}
+
+          ---
+
+          - This pull request is **bot-managed**: it is regenerated on every push to \`main\`
+            and closes itself when no Version Plans are pending. Do not push to
+            \`release/next\` or enable auto-merge.
+          - **Merging this pull request publishes to npm.** Prefer a squash merge with the
+            title unchanged; the release policy validates the commit either way.
+          BODYEOF
+          )
+          pr_number=$(gh pr list --base main --head release/next --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr_number" ]; then
+            gh pr create --base main --head release/next --title "$TITLE" --body "$body"
+          else
+            gh pr edit "$pr_number" --title "$TITLE" --body "$body"
+          fi

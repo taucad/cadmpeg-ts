@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "cadmpeg-wasm"
+description = "wasm-bindgen shell over cadmpeg-binding; built once per format module."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# A module's codecs are its features (charter D11): `--features sldprt,step`
+# builds the SOLIDWORKS module, which reads SLDPRT and writes STEP.
+[features]
+default = []
+fcstd = ["cadmpeg-binding/fcstd"]
+f3d = ["cadmpeg-binding/f3d"]
+inventor = ["cadmpeg-binding/inventor"]
+sldprt = ["cadmpeg-binding/sldprt"]
+catia = ["cadmpeg-binding/catia"]
+creo = ["cadmpeg-binding/creo"]
+nx = ["cadmpeg-binding/nx"]
+rhino = ["cadmpeg-binding/rhino"]
+step = ["cadmpeg-binding/step"]
+iges = ["cadmpeg-binding/iges"]
+sat = ["cadmpeg-binding/sat"]
+pvz = ["cadmpeg-binding/pvz"]
+usd = ["cadmpeg-binding/usd"]
+
+[dependencies]
+cadmpeg-binding.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.130"
+
+[lints]
+workspace = true

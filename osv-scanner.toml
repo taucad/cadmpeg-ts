@@ -1,0 +1,2 @@
+# Every suppression must include a stable reason and an RFC 3339 expiry timestamp;
+# osv-scanner 2.6 rejects a bare date.

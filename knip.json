@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "treatConfigHintsAsErrors": true,
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.mjs",
+        "scripts/lib/*.mjs",
+        "src/**/*.test.ts",
+        "tests/**/*.test.mjs",
+        "*.config.ts",
+        "*.test.ts",
+        "src/cjs-error.cjs"
+      ],
+      "ignore": ["src/cjs-error.d.cts"],
+      "ignoreBinaries": ["wasm-bindgen"],
+      "ignoreDependencies": ["@nx/js"]
+    }
+  }
+}

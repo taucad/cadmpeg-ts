@@ -1,0 +1,7 @@
+# Matches upstream cadmpeg's pin (upstream/cadmpeg/rust-toolchain.toml), so
+# the engine builds with the compiler its own CI uses. Bump with the upstream
+# pin, never ahead of it.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "llvm-tools-preview", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

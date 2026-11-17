@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "coverage/**",
+    "dist/**",
+    "npm/**",
+    "patches/**",
+    "rust/target/**",
+    "src/native/**",
+    "src/wasm/**",
+    "tests/fixtures/**",
+    "tests/out/**",
+    "upstream/**"
+  ],
+  "plugins": ["typescript", "unicorn"],
+  "rules": {
+    "max-params": [
+      "error",
+      {
+        "max": 3
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["tests/**/*.mjs"],
+      "rules": {
+        "typescript/no-floating-promises": "off"
+      }
+    }
+  ]
+}
