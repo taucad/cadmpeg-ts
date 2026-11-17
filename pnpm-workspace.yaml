@@ -24,3 +24,10 @@ overrides:
   'katex@>=0.11.0 <0.18.2': 0.18.2
   'vite@>=8.2.0 <8.2.4': 8.2.4
   'zod@>=4.0.0 <4.6.6': 4.6.6
+# Accepted by the operator (2026-11-17): picomatch reaches this repository only
+# through dev tooling (Nx, tinyglobby); cadmpeg-ts has no runtime dependencies,
+# and no patched release exists on npm (latest 4.0.7, fixed in >=4.0.8).
+# Remove when a fixed picomatch ships and the override above can move to it.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
