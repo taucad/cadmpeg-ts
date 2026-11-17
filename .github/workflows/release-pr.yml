@@ -136,7 +136,9 @@ jobs:
 
           # A version can be present in main's manifest without a published tag
           # when its release CI failed. List commits from the latest actual tag.
-          published_tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' main)
+          # The first release has no tag yet: list from the root commit instead.
+          published_tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' main 2>/dev/null ||
+            git rev-list --max-parents=0 main | tail -n 1)
           {
             echo "version=$version"
             echo "previous_version=$previous_version"

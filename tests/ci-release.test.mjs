@@ -179,6 +179,14 @@ describe('CI release policy', () => {
 describe('release pull request staging', () => {
   const workflow = readFileSync(new URL('../.github/workflows/release-pr.yml', import.meta.url), 'utf8');
 
+  it('should list commits from the root commit when no release tag exists yet', () => {
+    assert(
+      workflow.includes("git describe --tags --abbrev=0 --match 'v[0-9]*' main 2>/dev/null ||"),
+      'the first release has no tag; git describe must not abort the release pull request',
+    );
+    assert(workflow.includes('git rev-list --max-parents=0 main | tail -n 1'));
+  });
+
   /** The `allowed` guard the release-pr job greps its staged file list against. */
   const allowed = (() => {
     const declaration = /^\s*allowed='([^']+)'$/mu.exec(workflow);
