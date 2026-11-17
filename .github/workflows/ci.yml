@@ -215,7 +215,7 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     needs: preflight
-    timeout-minutes: 120
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -299,11 +299,16 @@ jobs:
         if: matrix.cross == '-x'
         with:
           tool: cargo-zigbuild
-      # The macOS runners have 7 GB; three codec crates compiling at one
-      # codegen unit each swap until the job times out.
-      - name: Limit parallel crates on macOS
+      # The macOS runners have 7 GB. With fat LTO the addon's final link
+      # optimizes every codec as one module and swaps past the job limit;
+      # thin LTO keeps cross-crate inlining at a fraction of the memory.
+      - name: Fit the addon build in the macOS runner's memory
         if: runner.os == 'macOS'
-        run: echo 'CARGO_BUILD_JOBS=2' >> "$GITHUB_ENV"
+        run: |
+          {
+            echo 'CARGO_BUILD_JOBS=2'
+            echo 'CARGO_PROFILE_RELEASE_LTO=thin'
+          } >> "$GITHUB_ENV"
       - name: Relax link-time optimization for the i686 MSVC link
         if: matrix.target == 'i686-pc-windows-msvc'
         shell: bash
