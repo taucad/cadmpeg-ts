@@ -385,9 +385,15 @@ describe('CI workflow policy', () => {
       assert(!body.includes('id-token: write'));
     });
 
-    // 0.5.0 was green here and still broken for consumers: producer CI only
-    // ever tested the API cadmpeg-ts declared, never the graph it published.
-    it('should install the published preview graph before the pull request can merge', () => {
+    // pkg.pr.new refuses unwhitelisted uploads of this size (413), so the
+    // preview pair runs report-only and consumers verify against the npm beta.
+    it('should keep the preview pair report-only', () => {
+      for (const name of ['preview', 'preview-consumer']) {
+        assert(job(name).includes('continue-on-error: true'), `${name} must be report-only`);
+      }
+    });
+
+    it('should install the published preview graph when the preview publishes', () => {
       const body = job('preview-consumer');
       assert(
         body.includes(
@@ -723,9 +729,7 @@ describe('CI workflow policy', () => {
         assert(body.includes(`'${required}'`), `ci-gate must require ${required}`);
       }
       assert(body.includes("'publish', 'registry-verify', 'registry-smoke', 'registry-release'"));
-      assert(
-        body.includes("if (process.env.PREVIEW === 'true') required.push('preview', 'preview-consumer')"),
-      );
+      assert(!body.includes('preview'), 'previews are report-only: ci-gate must not need or require them');
     });
   });
 });
