@@ -10,6 +10,11 @@
  * and proves the loader opened the named one. The caller always names the
  * suffix in `CADMPEG_TS_NATIVE_SUFFIX`: this script holds no host-to-target
  * map, because the generated loader owns selection.
+ *
+ * A pull request assembles a subset of the configured targets and names it in
+ * `CADMPEG_TS_NATIVE_TARGETS`; the frozen manifest must then record exactly
+ * that subset. Unset or empty, the manifest must record every configured
+ * target, which is what a publishing run freezes.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -19,7 +24,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
 
-import { readNapiTargets } from './lib/napi-targets.mjs';
+import { parseTargetList, readNapiTargets, selectTargets } from './lib/napi-targets.mjs';
 
 const ROOT_PACKAGE = 'cadmpeg-ts';
 const SUFFIX_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
@@ -41,6 +46,45 @@ export const requireNativeSuffix = (environment) => {
     throw new Error(`CADMPEG_TS_NATIVE_SUFFIX is not a platform suffix: ${suffix}`);
   }
   return suffix;
+};
+
+/**
+ * Read the target subset the run assembled, if it assembled a subset.
+ *
+ * @param {Record<string, string | undefined>} environment - Process environment.
+ * @returns {string[] | undefined} The subset's triples, or `undefined` for every configured target.
+ */
+export const readNativeTargets = (environment) => {
+  const value = environment['CADMPEG_TS_NATIVE_TARGETS'];
+  return value === undefined || value === '' ? undefined : parseTargetList(value);
+};
+
+/**
+ * Hold the frozen tarball manifest to what the run assembled: the root package
+ * and every configured platform package, or the root and exactly the named
+ * subset. A tarball set that lost a platform package fails here rather than
+ * passing every smoke row that happens not to need it.
+ *
+ * @param {{ packages?: unknown }} manifest - Parsed `test-tarballs.json`.
+ * @param {Array<{ name: string, triple: string }>} targets - Configured platform packages.
+ * @param {string[] | undefined} subset - Assembled target subset, or `undefined` for every target.
+ * @returns {string[]} The sorted package names the manifest records.
+ */
+export const checkFrozenInventory = (manifest, targets, subset) => {
+  const expected = new Set([ROOT_PACKAGE, ...selectTargets(targets, subset).map(({ name }) => name)]);
+  const recorded = Object.keys(
+    typeof manifest.packages === 'object' && manifest.packages !== null ? manifest.packages : {},
+  ).sort();
+  const missing = [...expected].filter((name) => !recorded.includes(name)).sort();
+  const unexpected = recorded.filter((name) => !expected.has(name));
+  const scope = subset === undefined ? 'every configured target' : `the target subset ${subset.join(', ')}`;
+  if (missing.length > 0) {
+    throw new Error(`the frozen tarball manifest for ${scope} is missing ${missing.join(', ')}`);
+  }
+  if (unexpected.length > 0) {
+    throw new Error(`the frozen tarball manifest for ${scope} also records ${unexpected.join(', ')}`);
+  }
+  return recorded;
 };
 
 /**
@@ -379,13 +423,20 @@ assert.throws(() => require('cadmpeg-ts'), /cadmpeg-ts is ESM-only; use import\\
 const main = () => {
   const suffix = requireNativeSuffix(process.env);
   const mode = resolveSmokeMode(process.env);
+  const subset = readNativeTargets(process.env);
   // The rule comes off this checkout's `napi.targets`, which is what the
   // release under test was configured from; `readNapiTargets` resolves no
   // package, so the clean room stays dependency-free.
-  const rule = expectedPlatformPackageSet(
-    suffix,
-    readNapiTargets(new URL('../package.json', import.meta.url)).packages,
-  );
+  const { packages: targets } = readNapiTargets(new URL('../package.json', import.meta.url));
+  const rule = expectedPlatformPackageSet(suffix, targets);
+  if (mode.kind === 'registry' && subset !== undefined) {
+    throw new Error(
+      'a registry smoke installs the complete published release; unset CADMPEG_TS_NATIVE_TARGETS',
+    );
+  }
+  if (subset !== undefined && !selectTargets(targets, subset).some((target) => target.suffix === suffix)) {
+    throw new Error(`${suffix} is outside the assembled target subset ${subset.join(', ')}`);
+  }
   const platformName = rule.expected;
   const fixture = fileURLToPath(new URL('../tests/fixtures/nist_ctc_01_asme1_ap242-e1.stp', import.meta.url));
   const work = mkdtempSync(join(tmpdir(), 'cadmpeg-ts-package-'));
@@ -396,6 +447,7 @@ const main = () => {
     let configuredNames;
     if (mode.kind === 'tarball') {
       const frozen = readFrozenManifest(mode.directory);
+      checkFrozenInventory(frozen, targets, subset);
       const selection = selectTarballs(frozen, suffix);
       version = selection.version;
       configuredNames = Object.keys(frozen.packages);

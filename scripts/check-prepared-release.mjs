@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { readNapiTargets } from './lib/napi-targets.mjs';
+import { parseTargetList, readNapiTargets, selectTargets } from './lib/napi-targets.mjs';
 import { validatePackageFiles } from './package-files.mjs';
 
 const LOADER = 'dist/native/index.js';
@@ -112,10 +112,16 @@ const rootPackFindings = (packedFiles) => {
  * optional dependencies were materialized for exactly those packages, the
  * generated loader shipped without its declarations, and a root tarball that
  * still matches the file contract and carries no addon.
+ *
+ * `targets` names an explicit subset of target triples, the ones a pull request
+ * built and assembled; the same assertions then hold for exactly that subset.
+ * A publishing run passes none, so it must hold every configured target.
  */
-export const preparedReleaseFindings = ({ npmDir = 'npm', packedFiles, root }) => {
+export const preparedReleaseFindings = ({ npmDir = 'npm', packedFiles, root, targets }) => {
   const rootDirectory = resolve(root);
-  const { manifest, packages } = readNapiTargets(join(rootDirectory, 'package.json'));
+  const configuredTargets = readNapiTargets(join(rootDirectory, 'package.json'));
+  const { manifest } = configuredTargets;
+  const packages = selectTargets(configuredTargets.packages, targets);
   const npmDirectory = join(rootDirectory, npmDir);
   const findings = [];
 
@@ -169,6 +175,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     options: {
       'npm-dir': { default: 'npm', type: 'string' },
       root: { default: '.', type: 'string' },
+      targets: { type: 'string' },
     },
   });
   try {
@@ -177,6 +184,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       npmDir: values['npm-dir'],
       packedFiles: packRoot(root),
       root,
+      targets: values.targets === undefined ? undefined : parseTargetList(values.targets),
     });
     for (const finding of findings) {
       process.stderr.write(`::error::${finding}\n`);
@@ -185,7 +193,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.stderr.write(`${findings.length} prepared release findings\n`);
       process.exit(1);
     }
-    process.stdout.write('prepared release tree is complete\n');
+    process.stdout.write(
+      values.targets === undefined
+        ? 'prepared release tree is complete\n'
+        : `prepared release tree is complete for the target subset ${values.targets}\n`,
+    );
   } catch (error) {
     process.stderr.write(`::error::${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);

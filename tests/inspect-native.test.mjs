@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
   binaryFindings,
   detectBinaryFormat,
+  inspectNative,
   inventoryFindings,
   machoDependencies,
   parseAndroidApiLevel,
@@ -617,5 +621,56 @@ describe('native package inventory assertions', () => {
     assert.deepEqual(inventoryFindings({ inventory, packages, stray: [] }), [
       `linux-arm64-gnu, linux-arm64-musl: share the identical binary ${duplicate}`,
     ]);
+  });
+});
+
+describe('native inspection of a pull request subset', () => {
+  // No binary below is a configured one, so the inspector reaches no LLVM tool;
+  // naming a directory keeps it from asking rustc for one.
+  const inspectTree = (files, targets) => {
+    const root = mkdtempSync(join(tmpdir(), 'cadmpeg-ts-inspect-'));
+    const previous = process.env['LLVM_TOOLS_DIR'];
+    process.env['LLVM_TOOLS_DIR'] = join(root, 'no-tools');
+    try {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ napi: packageJsonNapi }));
+      for (const file of files) {
+        mkdirSync(join(root, 'npm', file.split('/')[0]), { recursive: true });
+        writeFileSync(join(root, 'npm', file), 'not a binary');
+      }
+      mkdirSync(join(root, 'npm'), { recursive: true });
+      return inspectNative({ cwd: root, targets }).findings;
+    } finally {
+      if (previous === undefined) delete process.env['LLVM_TOOLS_DIR'];
+      else process.env['LLVM_TOOLS_DIR'] = previous;
+      rmSync(root, { force: true, recursive: true });
+    }
+  };
+  const packageJsonNapi = readNapiTargets(new URL('../package.json', import.meta.url)).manifest.napi;
+
+  it('should demand exactly the named subset of binaries', () => {
+    assert.deepEqual(inspectTree([], ['x86_64-unknown-linux-gnu', 'aarch64-apple-darwin']), [
+      'darwin-arm64: npm/darwin-arm64/cadmpeg-ts.darwin-arm64.node is missing',
+      'linux-x64-gnu: npm/linux-x64-gnu/cadmpeg-ts.linux-x64-gnu.node is missing',
+    ]);
+  });
+
+  it('should demand every configured binary when no subset is named', () => {
+    assert.equal(inspectTree([], undefined).length, 16);
+  });
+
+  it('should treat a binary outside the subset as a stray', () => {
+    const findings = inspectTree(
+      ['linux-s390x-gnu/cadmpeg-ts.linux-s390x-gnu.node'],
+      ['x86_64-unknown-linux-gnu'],
+    );
+    assert(
+      findings.includes(
+        'npm/linux-s390x-gnu/cadmpeg-ts.linux-s390x-gnu.node is not a configured target binary',
+      ),
+    );
+  });
+
+  it('should refuse a subset that names an unconfigured target', () => {
+    assert.throws(() => inspectTree([], ['x86_64-unknown-netbsd']), /is not a configured napi target/u);
   });
 });

@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { readNapiTargets } from './lib/napi-targets.mjs';
+import { parseTargetList, readNapiTargets, selectTargets } from './lib/napi-targets.mjs';
 
 const MANIFEST = 'test-tarballs.json';
 
@@ -30,11 +30,17 @@ export const npmPack = (directory, destination) => {
  * directory and record the integrity npm computed for each. Runtime jobs
  * install these exact tarballs, and `registry-verify` later proves the registry
  * serves the same bytes, so the manifest also travels inside the frozen tree.
+ *
+ * `targets` names an explicit subset of target triples, the ones a pull request
+ * built; only those platform packages are packed beside the root. A publishing
+ * run passes none and packs every configured target.
  */
-export const packTestTarballs = ({ npmDir = 'npm', out, pack = npmPack, root }) => {
+export const packTestTarballs = ({ npmDir = 'npm', out, pack = npmPack, root, targets }) => {
   const rootDirectory = resolve(root);
   const outDirectory = resolve(out);
-  const { manifest, packages } = readNapiTargets(join(rootDirectory, 'package.json'));
+  const configured = readNapiTargets(join(rootDirectory, 'package.json'));
+  const { manifest } = configured;
+  const packages = selectTargets(configured.packages, targets);
   mkdirSync(outDirectory, { recursive: true });
 
   const sources = [
@@ -127,11 +133,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       'extract-from': { type: 'string' },
       out: { type: 'string' },
       root: { default: '.', type: 'string' },
+      targets: { type: 'string' },
     },
   });
   try {
     if (!values.out) throw new Error('expected --out <directory>');
     if (values['extract-from']) {
+      if (values.targets !== undefined)
+        throw new Error('--targets applies to packing, not to --extract-from');
       const directories = extractPreviewPackages({ from: values['extract-from'], out: values.out });
       process.stdout.write(`${directories.join('\n')}\n`);
       process.exit(0);
@@ -140,6 +149,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       npmDir: values['npm-dir'],
       out: values.out,
       root: values.root,
+      targets: values.targets === undefined ? undefined : parseTargetList(values.targets),
     });
     process.stdout.write(`packed ${Object.keys(output.packages).length} tarballs at ${output.version}\n`);
   } catch (error) {

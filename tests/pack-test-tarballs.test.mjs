@@ -173,3 +173,37 @@ describe('frozen test tarball manifest', () => {
     );
   });
 });
+
+describe('frozen test tarball manifest for a pull request subset', () => {
+  it('should pack the root and exactly the named platform packages', () => {
+    const root = createTree();
+    const out = join(root, 'tarballs');
+    const { calls, pack } = recordingPack();
+
+    const result = packTestTarballs({
+      out,
+      pack,
+      root,
+      targets: ['x86_64-unknown-linux-gnu', 'aarch64-apple-darwin'],
+    });
+
+    assert.equal(calls.length, 3);
+    assert.deepEqual(Object.keys(result.packages), [
+      'cadmpeg-ts',
+      'cadmpeg-ts-darwin-arm64',
+      'cadmpeg-ts-linux-x64-gnu',
+    ]);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, 'test-tarballs.json'), 'utf8')), result);
+  });
+
+  it('should refuse a subset that names an unconfigured target', () => {
+    const root = createTree();
+    const { calls, pack } = recordingPack();
+
+    assert.throws(
+      () => packTestTarballs({ out: join(root, 'tarballs'), pack, root, targets: ['wasm32-wasip1'] }),
+      /wasm32-wasip1 is not a configured napi target/u,
+    );
+    assert.equal(calls.length, 0);
+  });
+});

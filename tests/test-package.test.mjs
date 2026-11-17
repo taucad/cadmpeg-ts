@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,11 +7,13 @@ import { describe, it } from 'node:test';
 
 import { readNapiTargets } from '../scripts/lib/napi-targets.mjs';
 import {
+  checkFrozenInventory,
   checkInstalledPlatformPackages,
   detectPlatformPackages,
   expectedPlatformPackageSet,
   formatCauseChain,
   readFrozenManifest,
+  readNativeTargets,
   requireNativeSuffix,
   resolveSmokeMode,
   selectedPlatformPackages,
@@ -400,5 +403,88 @@ describe('cause chain formatting', () => {
 
   it('should print a thrown value that is not an error', () => {
     assert.match(formatCauseChain('exploded'), /^error: exploded$/mu);
+  });
+});
+
+describe('frozen tarball inventory', () => {
+  const { packages: targets } = readNapiTargets(new URL('../package.json', import.meta.url));
+  const manifestOf = (names) => ({
+    version: '1.2.3',
+    packages: Object.fromEntries(
+      names.map((name) => [name, { filename: `${name}-1.2.3.tgz`, integrity: 'sha512-x', version: '1.2.3' }]),
+    ),
+  });
+  const everyName = ['cadmpeg-ts', ...targets.map(({ name }) => name)];
+  const subset = ['x86_64-unknown-linux-gnu', 'aarch64-apple-darwin'];
+  const subsetNames = ['cadmpeg-ts', 'cadmpeg-ts-darwin-arm64', 'cadmpeg-ts-linux-x64-gnu'];
+
+  it('should read no subset from an unset or empty variable', () => {
+    assert.equal(readNativeTargets({}), undefined);
+    assert.equal(readNativeTargets({ CADMPEG_TS_NATIVE_TARGETS: '' }), undefined);
+  });
+
+  it('should read the subset a pull request assembled', () => {
+    assert.deepEqual(readNativeTargets({ CADMPEG_TS_NATIVE_TARGETS: subset.join(',') }), subset);
+  });
+
+  it('should accept a complete manifest when no subset is named', () => {
+    assert.deepEqual(
+      checkFrozenInventory(manifestOf(everyName), targets, undefined),
+      [...everyName].sort((left, right) => left.localeCompare(right)),
+    );
+  });
+
+  it('should reject a subset manifest when no subset is named', () => {
+    assert.throws(
+      () => checkFrozenInventory(manifestOf(subsetNames), targets, undefined),
+      /for every configured target is missing cadmpeg-ts-android-arm-eabi, /u,
+    );
+  });
+
+  it('should accept exactly the named subset', () => {
+    assert.deepEqual(checkFrozenInventory(manifestOf(subsetNames), targets, subset), subsetNames);
+  });
+
+  it('should reject a subset manifest that lost a package or gained one', () => {
+    assert.throws(
+      () => checkFrozenInventory(manifestOf(subsetNames.slice(0, 2)), targets, subset),
+      /is missing cadmpeg-ts-linux-x64-gnu$/u,
+    );
+    assert.throws(
+      () => checkFrozenInventory(manifestOf([...subsetNames, 'cadmpeg-ts-freebsd-x64']), targets, subset),
+      /also records cadmpeg-ts-freebsd-x64$/u,
+    );
+  });
+});
+
+describe('target subset admission', () => {
+  // Both refusals happen before any install, so the script can run here.
+  const run = (environment) =>
+    spawnSync(process.execPath, [new URL('../scripts/test-package.mjs', import.meta.url).pathname], {
+      encoding: 'utf8',
+      env: { ...process.env, CADMPEG_TS_REGISTRY_VERSION: '', CADMPEG_TS_TARBALL_DIR: '', ...environment },
+    });
+
+  it('should refuse a registry smoke that names a target subset', () => {
+    const result = run({
+      CADMPEG_TS_NATIVE_SUFFIX: 'linux-x64-gnu',
+      CADMPEG_TS_NATIVE_TARGETS: 'x86_64-unknown-linux-gnu',
+      CADMPEG_TS_REGISTRY_VERSION: '1.2.3',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /a registry smoke installs the complete published release/u);
+  });
+
+  it('should refuse to smoke a suffix the subset did not assemble', () => {
+    const result = run({
+      CADMPEG_TS_NATIVE_SUFFIX: 'linux-x64-musl',
+      CADMPEG_TS_NATIVE_TARGETS: 'x86_64-unknown-linux-gnu',
+      CADMPEG_TS_TARBALL_DIR: 'tarballs',
+    });
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /linux-x64-musl is outside the assembled target subset x86_64-unknown-linux-gnu/u,
+    );
   });
 });
