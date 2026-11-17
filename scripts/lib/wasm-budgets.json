@@ -1,4 +1,57 @@
 {
-  "measured": "pending the first CI build of every module",
-  "modules": {}
+  "measured": "CI run 43994178285 (head 18ef72a), opt-level 3 + simd128, no wasm-opt; ceilings are measured + 5%, rounded up to 64 KiB",
+  "modules": {
+    "catia": {
+      "raw": 22740992,
+      "brotli11": 4259840
+    },
+    "creo": {
+      "raw": 21299200,
+      "brotli11": 3932160
+    },
+    "f3d": {
+      "raw": 38731776,
+      "brotli11": 6881280
+    },
+    "fcstd": {
+      "raw": 19136512,
+      "brotli11": 3276800
+    },
+    "iges": {
+      "raw": 18939904,
+      "brotli11": 3211264
+    },
+    "inventor": {
+      "raw": 20774912,
+      "brotli11": 3670016
+    },
+    "nx": {
+      "raw": 23003136,
+      "brotli11": 3801088
+    },
+    "pvz": {
+      "raw": 14155776,
+      "brotli11": 2490368
+    },
+    "rhino": {
+      "raw": 19988480,
+      "brotli11": 3342336
+    },
+    "sat": {
+      "raw": 14680064,
+      "brotli11": 2555904
+    },
+    "sldprt": {
+      "raw": 26607616,
+      "brotli11": 4718592
+    },
+    "step": {
+      "raw": 13434880,
+      "brotli11": 2293760
+    },
+    "usd": {
+      "raw": 15204352,
+      "brotli11": 2752512
+    }
+  }
 }
