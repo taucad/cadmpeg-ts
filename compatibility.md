@@ -21,7 +21,10 @@ well, is cadmpeg's. Each mark below maps to a CI job in `.github/workflows/ci.ym
 | Any Node host without a matching native addon | WebAssembly | `smoke` (`backend: 'wasm'`) |
 
 The native addon and the WebAssembly modules produce byte-identical STEP for
-the same input; `smoke` checks this on every row.
+the same input; `smoke` checks this on every row whose runtime runs WebAssembly
+SIMD. The modules are built with SIMD, which Node 22 on ppc64le does not run:
+there the wasm backend refuses with `BACKEND_UNAVAILABLE` and Node uses the
+native addon. Node 26 on ppc64le runs both and is parity-checked.
 
 ## Formats
 

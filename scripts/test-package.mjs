@@ -309,12 +309,29 @@ import { readFile } from 'node:fs/promises';
 import { formatCauseChain, selectedPlatformPackages, settleLoaderSelection } from ${JSON.stringify(helperUrl)};
 
 const [phase, fixture] = process.argv.slice(2);
+// The WebAssembly modules use SIMD. V8 refuses it on some hosts (Node 22 on
+// ppc64le), where the wasm backend is unavailable and Node runs native only.
+// The probe is the smallest module that uses a v128 value.
+const SIMD_PROBE = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]);
+const wasmSimd = await WebAssembly.compile(SIMD_PROBE).then(() => true, () => false);
+const NO_SIMD_HOSTS = new Set(['cadmpeg-ts-linux-ppc64-gnu']);
+if (!wasmSimd) {
+  assert(
+    NO_SIMD_HOSTS.has(process.env['CADMPEG_TS_SMOKE_EXPECTED']) && process.versions.node.startsWith('22.'),
+    \`only Node 22 on ppc64le may lack WebAssembly SIMD, not \${process.env['CADMPEG_TS_SMOKE_EXPECTED']} on Node \${process.versions.node}\`,
+  );
+}
 try {
   const api = await import('cadmpeg-ts');
   if (phase === 'load') {
     // The published modules are packed beside the native loader; a consumer
     // bundling for browsers resolves exactly these bytes.
-    await WebAssembly.compile(await readFile(new URL(import.meta.resolve('cadmpeg-ts/wasm/step_bg.wasm'))));
+    const stepModule = await readFile(new URL(import.meta.resolve('cadmpeg-ts/wasm/step_bg.wasm')));
+    if (wasmSimd) await WebAssembly.compile(stepModule);
+    else {
+      assert.deepEqual([...stepModule.subarray(0, 4)], [0, 97, 115, 109], 'step_bg.wasm must be a WebAssembly module');
+      console.log('wasm compile not attempted: this runtime lacks WebAssembly SIMD');
+    }
     const native = await api.createCadmpeg({ backend: 'native' });
     assert.equal(native.backend, 'native');
     // The addon is open by now, so the loaded shared objects say which of the
@@ -326,6 +343,17 @@ try {
   } else {
     const input = { name: 'part.stp', bytes: new Uint8Array(await readFile(fixture)) };
     const native = await (await api.createCadmpeg({ backend: 'native' })).convert(input, { to: 'step' });
+    if (!wasmSimd) {
+      assert.equal(native.backend, 'native');
+      assert.equal(new TextDecoder().decode(native.files[0].bytes.subarray(0, 13)), 'ISO-10303-21;');
+      await assert.rejects(
+        async () => (await api.createCadmpeg({ backend: 'wasm' })).convert(input, { to: 'step' }),
+        (error) => error?.code === 'BACKEND_UNAVAILABLE',
+        'without WebAssembly SIMD the wasm backend must refuse with BACKEND_UNAVAILABLE',
+      );
+      console.log(\`converted \${input.bytes.length} bytes of STEP natively; wasm backend unavailable without SIMD\`);
+      process.exit(0);
+    }
     const wasm = await (await api.createCadmpeg({ backend: 'wasm' })).convert(input, { to: 'step' });
     assert.equal(native.backend, 'native');
     assert.equal(wasm.backend, 'wasm');
