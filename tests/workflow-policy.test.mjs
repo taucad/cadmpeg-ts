@@ -272,7 +272,7 @@ describe('CI workflow policy', () => {
     });
 
     it('should refuse a prepared release archive above the artifact ceiling', () => {
-      assert(job('assemble').includes('167772160'), 'the freeze step must enforce the 160 MB ceiling');
+      assert(job('assemble').includes('1073741824'), 'the freeze step must enforce the 1 GiB ceiling');
     });
   });
 

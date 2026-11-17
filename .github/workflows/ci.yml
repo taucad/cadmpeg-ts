@@ -515,8 +515,10 @@ jobs:
           tar -czf "$archive" -C prepared .
           sha256sum "$archive" > "$archive.sha256"
           size="$(wc -c < "$archive")"
-          if [[ "$size" -gt 167772160 ]]; then
-            echo "::error::prepared release archive is $size bytes, above the 160 MB ceiling"
+          # 16 addons of about 50 MB gzipped each (every codec in one
+          # library) plus the WebAssembly modules measured 861 MB at 1c3798c.
+          if [[ "$size" -gt 1073741824 ]]; then
+            echo "::error::prepared release archive is $size bytes, above the 1 GiB ceiling"
             exit 1
           fi
           {
