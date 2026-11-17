@@ -21,7 +21,9 @@ jobs:
       npm-publish: ${{ steps.release.outputs.npm_publish }}
       npm-tag: ${{ steps.release.outputs.npm_tag }}
       version: ${{ steps.release.outputs.version }}
-      smoke-matrix: ${{ steps.smoke.outputs.matrix }}
+      native-matrix: ${{ steps.matrix.outputs.native }}
+      native-subset: ${{ steps.matrix.outputs.subset }}
+      smoke-matrix: ${{ steps.matrix.outputs.smoke }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,20 +48,63 @@ jobs:
             --package-version "$(node -p "require('./package.json').version")" \
             --subject "$(git log -1 --pretty=%s "$SOURCE_SHA")" \
             --changed-files-file /tmp/changed-files
-      # The runtime evidence matrix is data, not a static matrix: pull requests
-      # run the fast rows only, while main, release, and manual runs add the
-      # emulated and virtualized lanes that gate a release. A manual run is
+      # Both matrices are data, not static matrices. A pull request builds the
+      # four representative native targets (Linux x64 and arm64 glibc, Apple
+      # silicon, Windows x64) and smokes only those, with the fast smoke rows;
+      # main, release, and manual runs build all sixteen and add the emulated
+      # and virtualized lanes that gate a release. `subset` names the built
+      # triples on a pull request and is empty on a complete run, and the
+      # assembly scripts validate exactly what it names. A manual run is
       # evidence only — it derives `dispatch` from any ref and never publishes —
-      # so a pull request can prove those lanes on its own branch before merge.
-      - id: smoke
+      # so a pull request can prove every target and lane on its own branch
+      # before merge.
+      - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
           KIND: ${{ steps.release.outputs.kind }}
+          NPM_PUBLISH: ${{ steps.release.outputs.npm_publish }}
         run: |
-          node <<'NODE' >> "$GITHUB_OUTPUT"
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readNapiTargets } from './scripts/lib/napi-targets.mjs';
+
           const kind = process.env.KIND;
           const event = process.env.EVENT_NAME;
-          const slow = kind === 'main' || kind === 'release' || event === 'workflow_dispatch';
+          const complete = kind === 'main' || kind === 'release' || event === 'workflow_dispatch';
+          // Publication freezes and verifies every target or nothing.
+          if (process.env.NPM_PUBLISH === 'true' && !complete) {
+            throw new Error(`a publishing ${kind} run must build every native target`);
+          }
+
+          const builds = [
+            { target: 'aarch64-apple-darwin', os: 'macos-latest', representative: true },
+            { target: 'x86_64-apple-darwin', os: 'macos-latest' },
+            { target: 'x86_64-pc-windows-msvc', os: 'windows-2022', representative: true },
+            { target: 'aarch64-pc-windows-msvc', os: 'windows-2022' },
+            { target: 'i686-pc-windows-msvc', os: 'windows-2022' },
+            { target: 'x86_64-unknown-linux-gnu', os: 'ubuntu-24.04', cross: '--use-napi-cross', representative: true },
+            { target: 'aarch64-unknown-linux-gnu', os: 'ubuntu-24.04', cross: '--use-napi-cross', representative: true },
+            { target: 'armv7-unknown-linux-gnueabihf', os: 'ubuntu-24.04', cross: '--use-napi-cross' },
+            { target: 'powerpc64le-unknown-linux-gnu', os: 'ubuntu-24.04', cross: '--use-napi-cross' },
+            { target: 's390x-unknown-linux-gnu', os: 'ubuntu-24.04', cross: '--use-napi-cross' },
+            { target: 'x86_64-unknown-linux-musl', os: 'ubuntu-24.04', cross: '-x' },
+            { target: 'aarch64-unknown-linux-musl', os: 'ubuntu-24.04', cross: '-x' },
+            { target: 'armv7-unknown-linux-musleabihf', os: 'ubuntu-24.04', cross: '-x' },
+            { target: 'aarch64-linux-android', os: 'ubuntu-24.04' },
+            { target: 'armv7-linux-androideabi', os: 'ubuntu-24.04' },
+            { target: 'x86_64-unknown-freebsd', os: 'ubuntu-24.04' },
+          ];
+          const { packages } = readNapiTargets('package.json');
+          const configured = packages.map(({ triple }) => triple).sort().join();
+          if (builds.map(({ target }) => target).sort().join() !== configured) {
+            throw new Error('the native build rows must equal package.json napi.targets');
+          }
+          const native = builds
+            .filter((row) => complete || row.representative)
+            .map((row) => ({ ...row, profile: complete ? 'release' : 'pull-request' }));
+          const built = new Set(
+            packages.filter(({ triple }) => native.some((row) => row.target === triple)).map(({ suffix }) => suffix),
+          );
+
           // Official Node tarballs: the node images publish no ppc64le or s390x
           // tag on the current line, so those lanes install Node into Ubuntu.
           // Node 26 links `libatomic` on both, which `ubuntu:24.04` lacks.
@@ -92,8 +137,10 @@ jobs:
             { suffix: 'linux-s390x-gnu', lane: '26', os: 'ubuntu-24.04', recipe: 'container', qemu: true, platform: 'linux/s390x', image: 'ubuntu:24.04', setup: ubuntu('26.7.0', 's390x'), slow: true, timeout: 60 },
             { suffix: 'freebsd-x64', lane: '22', os: 'ubuntu-24.04', recipe: 'freebsd', slow: true, timeout: 60 },
           ];
-          const selected = rows.filter((row) => slow || !row.slow);
-          console.log(`matrix=${JSON.stringify(selected)}`);
+          const smoke = rows.filter((row) => (complete || !row.slow) && built.has(row.suffix));
+          console.log(`native=${JSON.stringify(native)}`);
+          console.log(`subset=${complete ? '' : native.map(({ target }) => target).join(',')}`);
+          console.log(`smoke=${JSON.stringify(smoke)}`);
           NODE
 
   quality:
@@ -218,51 +265,10 @@ jobs:
     timeout-minutes: 150
     strategy:
       fail-fast: false
+      # preflight emits the rows: the four representative targets on a pull
+      # request, all sixteen of package.json napi.targets otherwise.
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            representative: true
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-2022
-            representative: true
-          - target: aarch64-pc-windows-msvc
-            os: windows-2022
-          - target: i686-pc-windows-msvc
-            os: windows-2022
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-24.04
-            cross: '--use-napi-cross'
-            representative: true
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04
-            cross: '--use-napi-cross'
-          - target: armv7-unknown-linux-gnueabihf
-            os: ubuntu-24.04
-            cross: '--use-napi-cross'
-          - target: powerpc64le-unknown-linux-gnu
-            os: ubuntu-24.04
-            cross: '--use-napi-cross'
-          - target: s390x-unknown-linux-gnu
-            os: ubuntu-24.04
-            cross: '--use-napi-cross'
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-24.04
-            cross: '-x'
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-24.04
-            cross: '-x'
-          - target: armv7-unknown-linux-musleabihf
-            os: ubuntu-24.04
-            cross: '-x'
-          - target: aarch64-linux-android
-            os: ubuntu-24.04
-          - target: armv7-linux-androideabi
-            os: ubuntu-24.04
-          - target: x86_64-unknown-freebsd
-            os: ubuntu-24.04
+        include: ${{ fromJSON(needs.preflight.outputs.native-matrix) }}
     runs-on: ${{ matrix.os }}
     env:
       # The NAPI-RS template's floor; rustc raises arm64 macOS to its own 11.0.
@@ -304,18 +310,33 @@ jobs:
       # thin LTO keeps cross-crate inlining at a fraction of the memory.
       - name: Fit the addon build in the macOS runner's memory
         if: runner.os == 'macOS'
+        env:
+          PROFILE: ${{ matrix.profile }}
         run: |
-          {
-            echo 'CARGO_BUILD_JOBS=2'
-            echo 'CARGO_PROFILE_RELEASE_LTO=thin'
-          } >> "$GITHUB_ENV"
+          echo 'CARGO_BUILD_JOBS=2' >> "$GITHUB_ENV"
+          if [[ "$PROFILE" == release ]]; then
+            echo 'CARGO_PROFILE_RELEASE_LTO=thin' >> "$GITHUB_ENV"
+          fi
       - name: Relax link-time optimization for the i686 MSVC link
-        if: matrix.target == 'i686-pc-windows-msvc'
+        if: matrix.profile == 'release' && matrix.target == 'i686-pc-windows-msvc'
         shell: bash
         run: |
           {
             echo 'CARGO_PROFILE_RELEASE_LTO=false'
             echo 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32'
+          } >> "$GITHUB_ENV"
+      # A pull request proves the addon builds, loads, and converts on its
+      # representative targets; it ships nothing. Dropping link-time
+      # optimization and splitting codegen trades runtime speed it never
+      # measures for build time. Main, release, and manual runs keep the
+      # published profile, with the macOS and i686 relaxations above.
+      - name: Trade link-time optimization for build time on a pull request
+        if: matrix.profile == 'pull-request'
+        shell: bash
+        run: |
+          {
+            echo 'CARGO_PROFILE_RELEASE_LTO=false'
+            echo 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16'
           } >> "$GITHUB_ENV"
       # On the host for every row: the FreeBSD VM has no git, and it receives
       # the already-patched tree when it syncs the workspace.
@@ -432,6 +453,10 @@ jobs:
     needs: [preflight, quality, node, rust, build, build-wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # Empty on a complete run. On a pull request it names the built triples,
+      # and every step below assembles and validates exactly those.
+      NATIVE_SUBSET: ${{ needs.preflight.outputs.native-subset }}
     outputs:
       archive: ${{ steps.freeze.outputs.archive }}
       sha256: ${{ steps.freeze.outputs.sha256 }}
@@ -474,10 +499,19 @@ jobs:
       - run: pnpm run check:size
       - name: Record the per-module conversion speed
         run: node scripts/check-wasm-speed.mjs
-      - name: Generate the sixteen platform directories
-        run: pnpm exec napi create-npm-dirs --npm-dir npm
+      # A NAPI-RS config that names only the built subset scopes the generated
+      # directories, the collected addons, and the reconciled optional
+      # dependencies to it; package.json still configures all sixteen.
+      - name: Scope the platform packages to the built subset
+        if: env.NATIVE_SUBSET != ''
+        run: |
+          node -e 'console.log(JSON.stringify({ targets: process.env.NATIVE_SUBSET.split(",") }))' \
+            > "$RUNNER_TEMP/napi-subset.json"
+          echo "NAPI_CONFIG=$RUNNER_TEMP/napi-subset.json" >> "$GITHUB_ENV"
+      - name: Generate the platform directories
+        run: pnpm exec napi create-npm-dirs --npm-dir npm ${NAPI_CONFIG:+--config-path "$NAPI_CONFIG"}
       - name: Collect the native addons
-        run: pnpm exec napi artifacts --output-dir artifacts --npm-dir npm
+        run: pnpm exec napi artifacts --output-dir artifacts --npm-dir npm ${NAPI_CONFIG:+--config-path "$NAPI_CONFIG"}
       - name: Copy the physical license into every platform package
         run: |
           for directory in npm/*/; do
@@ -488,13 +522,15 @@ jobs:
           # The Darwin build rows pin the same target; the inspector raises its
           # expected x64 floor to it (arm64 is floored at 11.0 by the toolchain).
           MACOSX_DEPLOYMENT_TARGET: '10.13'
-        run: node scripts/inspect-native.mjs
+        run: node scripts/inspect-native.mjs ${NATIVE_SUBSET:+--targets "$NATIVE_SUBSET"}
       - name: Reconcile the platform manifests without publishing
-        run: pnpm exec napi pre-publish --skip-optional-publish -t npm --no-gh-release
+        run: >-
+          pnpm exec napi pre-publish --skip-optional-publish -t npm --no-gh-release
+          ${NAPI_CONFIG:+--config-path "$NAPI_CONFIG"}
       - name: Assert the prepared release is complete
-        run: node scripts/check-prepared-release.mjs
+        run: node scripts/check-prepared-release.mjs ${NATIVE_SUBSET:+--targets "$NATIVE_SUBSET"}
       - name: Pack the frozen test tarballs
-        run: node scripts/pack-test-tarballs.mjs --out tarballs
+        run: node scripts/pack-test-tarballs.mjs --out tarballs ${NATIVE_SUBSET:+--targets "$NATIVE_SUBSET"}
       - run: node scripts/validate-pack.mjs
       - id: freeze
         name: Freeze the prepared release tree
@@ -550,6 +586,9 @@ jobs:
         include: ${{ fromJSON(needs.preflight.outputs.smoke-matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
+    env:
+      # The frozen tarballs hold exactly the assembled targets; empty means all.
+      CADMPEG_TS_NATIVE_TARGETS: ${{ needs.preflight.outputs.native-subset }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -584,6 +623,7 @@ jobs:
             --volume "$PWD:/cadmpeg-ts" --workdir /cadmpeg-ts \
             --env CADMPEG_TS_TARBALL_DIR=tarballs \
             --env CADMPEG_TS_NATIVE_SUFFIX="$SUFFIX" \
+            --env CADMPEG_TS_NATIVE_TARGETS \
             "$IMAGE" sh -c "$SETUP && node scripts/test-package.mjs"
       - uses: cross-platform-actions/action@e0b9770014ba65d5e0815f15b74031c3a635f641 # v1.6.0
         if: matrix.recipe == 'freebsd'
@@ -773,6 +813,10 @@ jobs:
       - name: Validate the frozen release tree
         working-directory: release
         run: node scripts/validate-pack.mjs
+      # Publication is every configured target or nothing: whatever matrix the
+      # run built, the frozen tree must hold all sixteen platform packages.
+      - name: Require every configured target in the frozen release tree
+        run: node scripts/check-prepared-release.mjs --root release
       - name: Publish the sixteen platform packages
         run: pnpm exec napi pre-publish --cwd release -t npm --no-gh-release
       - name: Publish the root package
