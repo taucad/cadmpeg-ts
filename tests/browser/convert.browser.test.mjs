@@ -48,7 +48,9 @@ test('routes a native-to-native conversion through STEP', async () => {
 
 test('rejects with stable codes', async () => {
   const engine = await createCadmpeg({ backend: 'wasm' });
-  await expect(engine.convert({ name: 'a.obj', bytes: step }, { to: 'step' })).rejects.toMatchObject({
+  // Detection reads the bytes, so the input must not be STEP whatever its name.
+  const obj = new TextEncoder().encode('v 0 0 0\n');
+  await expect(engine.convert({ name: 'a.obj', bytes: obj }, { to: 'step' })).rejects.toMatchObject({
     code: 'UNSUPPORTED_FORMAT',
   });
   await expect(engine.convert({ name: 'a.stp', bytes: step }, { to: 'obj' })).rejects.toBeInstanceOf(
