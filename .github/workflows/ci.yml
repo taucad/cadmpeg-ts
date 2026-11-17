@@ -338,6 +338,22 @@ jobs:
             echo 'CARGO_PROFILE_RELEASE_LTO=false'
             echo 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16'
           } >> "$GITHUB_ENV"
+      # sccache keeps compiled crates in the GitHub Actions cache, keyed by
+      # their inputs. rust-cache restores registry dependencies only and
+      # rebuilds every path crate, which is every upstream/cadmpeg codec;
+      # sccache caches those too. The FreeBSD guest compiles on its own.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        with:
+          version: v0.19.0
+      - name: Route rustc through sccache
+        if: matrix.target != 'x86_64-unknown-freebsd'
+        shell: bash
+        run: |
+          {
+            echo 'RUSTC_WRAPPER=sccache'
+            echo 'SCCACHE_GHA_ENABLED=true'
+          } >> "$GITHUB_ENV"
       # On the host for every row: the FreeBSD VM has no git, and it receives
       # the already-patched tree when it syncs the workspace.
       - name: Apply the upstream patch queue
@@ -439,6 +455,16 @@ jobs:
         with:
           node-version: '26'
       - run: rustup target add wasm32-unknown-unknown
+      # The same compilation cache the native rows use; see the build job.
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.19.0
+      - name: Route rustc through sccache
+        run: |
+          {
+            echo 'RUSTC_WRAPPER=sccache'
+            echo 'SCCACHE_GHA_ENABLED=true'
+          } >> "$GITHUB_ENV"
       - run: pnpm run build:wasm -- --modules ${{ matrix.module }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

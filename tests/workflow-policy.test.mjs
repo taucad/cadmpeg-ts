@@ -315,6 +315,35 @@ describe('CI workflow policy', () => {
       assert(body.includes('export CARGO_PROFILE_RELEASE_LTO=thin'));
     });
 
+    it('should compile the native and WebAssembly rows through sccache on the Actions cache', () => {
+      const [sccache] = [...workflow.matchAll(/uses: (mozilla-actions\/sccache-action@[0-9a-f]{40})/gu)].map(
+        (match) => match[1],
+      );
+      assert(sccache, 'the builds must set up sccache');
+      for (const name of ['build', 'build-wasm']) {
+        const body = job(name);
+        assert.equal(occurrences(body, `uses: ${sccache}`), 1, `${name} must set up sccache once`);
+        assert(body.includes("echo 'RUSTC_WRAPPER=sccache'"), `${name} must route rustc through sccache`);
+        assert(
+          body.includes("echo 'SCCACHE_GHA_ENABLED=true'"),
+          `${name} must use the Actions cache backend`,
+        );
+        const setup = body.indexOf(`uses: ${sccache}`);
+        const wrapper = body.indexOf("echo 'RUSTC_WRAPPER=sccache'");
+        const compile =
+          name === 'build' ? body.indexOf('pnpm exec napi build') : body.indexOf('pnpm run build:wasm');
+        assert(setup < wrapper && wrapper < compile, `${name} must install sccache before it compiles`);
+      }
+      // The FreeBSD guest has no sccache, so neither step applies to its row.
+      const body = job('build');
+      const guard = "\n        if: matrix.target != 'x86_64-unknown-freebsd'\n";
+      assert(body.includes(`uses: ${sccache} # v0.0.11${guard}`), 'the FreeBSD row must not set up sccache');
+      assert(
+        body.includes(`- name: Route rustc through sccache${guard}`),
+        'the FreeBSD row must not wrap rustc',
+      );
+    });
+
     it('should upload one bindings artifact per target with an error on an empty match', () => {
       const body = job('build');
       assert(body.includes('name: bindings-${{ matrix.target }}'));
