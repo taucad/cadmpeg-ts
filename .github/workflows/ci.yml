@@ -355,11 +355,22 @@ jobs:
         if: matrix.target != 'x86_64-unknown-freebsd'
         shell: bash
         run: |
-          {
-            echo 'RUSTC_WRAPPER=sccache'
-            echo 'SCCACHE_GHA_ENABLED=true'
-            echo 'SCCACHE_IDLE_TIMEOUT=0'
-          } >> "$GITHUB_ENV"
+          # sccache is an accelerator, never a requirement. Its server checks the
+          # Actions cache at startup and exits when the cache is unavailable (a 503
+          # 'Egress is over the account limit' failed every build on 2026-11-18), so
+          # start it here and route rustc through it only when it starts; a request
+          # that later hits a server I/O error compiles locally instead.
+          export SCCACHE_GHA_ENABLED=true SCCACHE_IDLE_TIMEOUT=0
+          if sccache --start-server; then
+            {
+              echo 'RUSTC_WRAPPER=sccache'
+              echo 'SCCACHE_GHA_ENABLED=true'
+              echo 'SCCACHE_IDLE_TIMEOUT=0'
+              echo 'SCCACHE_IGNORE_SERVER_IO_ERROR=1'
+            } >> "$GITHUB_ENV"
+          else
+            echo '::warning::sccache could not start; compiling without it'
+          fi
       # On the host for every row: the FreeBSD VM has no git, and it receives
       # the already-patched tree when it syncs the workspace.
       - name: Apply the upstream patch queue
@@ -467,11 +478,22 @@ jobs:
           version: v0.19.0
       - name: Route rustc through sccache
         run: |
-          {
-            echo 'RUSTC_WRAPPER=sccache'
-            echo 'SCCACHE_GHA_ENABLED=true'
-            echo 'SCCACHE_IDLE_TIMEOUT=0'
-          } >> "$GITHUB_ENV"
+          # sccache is an accelerator, never a requirement. Its server checks the
+          # Actions cache at startup and exits when the cache is unavailable (a 503
+          # 'Egress is over the account limit' failed every build on 2026-11-18), so
+          # start it here and route rustc through it only when it starts; a request
+          # that later hits a server I/O error compiles locally instead.
+          export SCCACHE_GHA_ENABLED=true SCCACHE_IDLE_TIMEOUT=0
+          if sccache --start-server; then
+            {
+              echo 'RUSTC_WRAPPER=sccache'
+              echo 'SCCACHE_GHA_ENABLED=true'
+              echo 'SCCACHE_IDLE_TIMEOUT=0'
+              echo 'SCCACHE_IGNORE_SERVER_IO_ERROR=1'
+            } >> "$GITHUB_ENV"
+          else
+            echo '::warning::sccache could not start; compiling without it'
+          fi
       - run: pnpm run build:wasm -- --modules ${{ matrix.module }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
