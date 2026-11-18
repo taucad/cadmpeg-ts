@@ -4,7 +4,7 @@ const config: UserConfig = {
   clean: true,
   deps: { neverBundle: [/^\.\/native\//u, /^\.\/wasm\//u] },
   dts: true,
-  entry: ['src/index.node.ts', 'src/index.ts', 'src/formats.ts'],
+  entry: ['src/index.node.ts', 'src/index.ts', 'src/core.ts', 'src/formats.ts'],
   format: 'esm',
   minify: true,
   outDir: 'dist',

@@ -6,7 +6,8 @@
  * `node` export condition instead, which adds the native addon.
  */
 
-import { bindHost, packagedGlue, packagedModuleUrl } from '#create.js';
+import { bindHost, packagedGlue } from '#create.js';
+import { packagedModuleUrl } from '#packaged.js';
 
 const api = bindHost({ loadGlue: packagedGlue, locateModule: packagedModuleUrl });
 

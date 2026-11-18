@@ -51,6 +51,18 @@
       },
       "default": "./dist/index.mjs"
     },
+    "./core": {
+      "import": {
+        "types": "./dist/core.d.mts",
+        "node": "./dist/index.node.mjs",
+        "default": "./dist/core.mjs"
+      },
+      "require": {
+        "types": "./dist/cjs-error.d.cts",
+        "default": "./dist/cjs-error.cjs"
+      },
+      "default": "./dist/core.mjs"
+    },
     "./formats": {
       "types": "./dist/formats.d.mts",
       "import": "./dist/formats.mjs",
@@ -76,7 +88,7 @@
     "lint": "oxlint --deny-warnings --type-aware && eslint .",
     "patches": "node scripts/apply-patches.mjs",
     "patches:check": "node scripts/apply-patches.mjs --check",
-    "pkgcheck": "pnpm run validate-pack && publint && attw --pack . --profile esm-only --entrypoints .",
+    "pkgcheck": "pnpm run validate-pack && publint && attw --pack . --profile esm-only --entrypoints . ./core ./formats",
     "plan:check": "nx release plan:check",
     "prepublishOnly": "node scripts/validate-pack.mjs",
     "prose": "./scripts/check-prose.sh",
