@@ -42,6 +42,22 @@ Rhino, ACIS, Creo View, OpenUSD, STEP and IGES. Writes STEP, IGES, CADIR and,
 as experimental writers, FreeCAD, Fusion, SOLIDWORKS, Rhino and OpenUSD.
 `cadmpeg-ts/formats` lists both without loading an engine.
 
+## Bundled browser apps
+
+`cadmpeg-ts` makes a bundler emit all thirteen modules. To deliver them
+yourself, import `cadmpeg-ts/core`, which emits none, and pass
+`locateModule`; verify what you fetch against `cadmpeg-ts/digests`:
+
+```typescript
+import { createCadmpeg } from 'cadmpeg-ts/core';
+import { digests } from 'cadmpeg-ts/digests';
+
+const converter = await createCadmpeg({ locateModule: (id) => fetchVerified(id, digests[id]) });
+```
+
+Each GitHub Release also carries every module as `<id>_bg.wasm.gz`, named by
+`digests[id].gzip`. Node.js resolves `cadmpeg-ts/core` to the native-first entry.
+
 ## Compatibility
 
 Node.js 22.13 or later on sixteen native targets, and current Chromium, Firefox

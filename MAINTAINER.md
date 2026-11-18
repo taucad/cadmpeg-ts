@@ -21,6 +21,15 @@ GitHub Actions owns npm OIDC publication, provenance, registry verification,
 tags, and GitHub Releases. Do not publish from a workstation, push to `release/next`, or enable auto-merge on the release pull
 request.
 
+Each version's GitHub Release carries the thirteen `<id>_bg.wasm.gz` engine
+assets that `cadmpeg-ts/digests` names. Assembly gzips them once, from the
+same bytes that generate the map, and freezes both. The `release-assets` job
+then drafts the Release, attaches any asset it lacks (an asset already
+attached is never replaced), downloads all of them back and checks each
+against the frozen map; `publish` needs that job, so a missing or differing
+asset publishes nothing to npm. `registry-release` publishes the draft, which
+creates the tag, after the registry checks pass.
+
 One root version materializes seventeen registry packages: `cadmpeg-ts` and the
 sixteen generated platform packages. The release job publishes the platform
 packages first and the root last, from a frozen prepared tree it never rebuilds.
@@ -56,6 +65,11 @@ version from `npm view` for several minutes, during which `npm deprecate` and
 workflow run resumes a partial publication: the prepared-release archive is
 retained for 30 days on release runs, and platform packages already on the
 registry are skipped.
+
+If `release-assets` fails because a draft holds an asset that differs from the
+map (a rebuilt assembly compresses the same modules to the same bytes only on
+the same Node.js zlib), nothing has reached npm: delete the draft Release by
+hand and re-run the workflow. Never edit the assets of a published Release.
 
 Never rebuild or amend a version that is part-published. If the root package
 went out while a platform package is missing or wrong, wait for the registry to

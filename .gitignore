@@ -13,3 +13,4 @@ rust/target/
 src/native/
 src/wasm/
 tests/out/
+engine-assets/

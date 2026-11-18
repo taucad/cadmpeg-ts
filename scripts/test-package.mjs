@@ -378,6 +378,16 @@ try {
     }
     const native = await api.createCadmpeg({ backend: 'native' });
     assert.equal(native.backend, 'native');
+    // The engine-free entry's \`node\` condition is the Node entry itself
+    // (engine delivery charter I7): the same factory, the same addon.
+    const core = await import('cadmpeg-ts/core');
+    assert.equal(core.createCadmpeg, api.createCadmpeg, 'cadmpeg-ts/core must resolve the Node entry under node');
+    assert.equal((await core.createCadmpeg({ backend: 'native' })).backend, 'native');
+    // The digest map names the packed bytes.
+    const { digests } = await import('cadmpeg-ts/digests');
+    const { createHash } = await import('node:crypto');
+    assert.equal(createHash('sha256').update(stepModule).digest('hex'), digests.step.wasm.sha256);
+    assert.equal(stepModule.byteLength, digests.step.wasm.byteLength);
     // The addon is open by now, so the loaded shared objects say which of the
     // installed platform packages the generated loader chose.
     const installed = JSON.parse(process.env['CADMPEG_TS_SMOKE_INSTALLED']);

@@ -26,7 +26,9 @@ export default tseslint.config(
   },
   {
     files: ['tests/browser/**/*.mjs'],
-    languageOptions: { globals: { ...globals.browser, ...globals.worker } },
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.worker, __CADMPEG_TS_WASM_BASE__: 'readonly' },
+    },
   },
   {
     files: ['**/*.{ts,tsx}'],

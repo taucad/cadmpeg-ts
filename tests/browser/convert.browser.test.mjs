@@ -58,3 +58,36 @@ test('rejects with stable codes', async () => {
   );
   await expect(createCadmpeg({ backend: 'native' })).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' });
 });
+
+// The engine-free entry: the caller fetches each module, verifies it against
+// `cadmpeg-ts/digests`, and hands the verified bytes over. Output must equal
+// the packaged entry's byte for byte.
+test('converts through cadmpeg-ts/core with modules the caller locates and verifies', async () => {
+  const { createCadmpeg: createCore } = await import('cadmpeg-ts/core');
+  const { digests } = await import('cadmpeg-ts/digests');
+  await expect(createCore()).rejects.toMatchObject({ code: 'INVALID_OPTIONS' });
+
+  const located = [];
+  const core = await createCore({
+    locateModule: async (id) => {
+      located.push(id);
+      const response = await fetch(`${__CADMPEG_TS_WASM_BASE__}${id}_bg.wasm`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+      expect(bytes.byteLength).toBe(digests[id].wasm.byteLength);
+      expect([...hash].map((byte) => byte.toString(16).padStart(2, '0')).join('')).toBe(
+        digests[id].wasm.sha256,
+      );
+      return bytes;
+    },
+  });
+  const packaged = await createCadmpeg({ backend: 'wasm' });
+  const input = { name: 'ftc06.SLDPRT', bytes: sldprt };
+  const [fromCore, fromPackaged] = [
+    await core.convert(input, { to: 'step' }),
+    await packaged.convert(input, { to: 'step' }),
+  ];
+  expect(fromCore.files[0].bytes).toEqual(fromPackaged.files[0].bytes);
+  expect(fromCore.losses).toEqual(fromPackaged.losses);
+  expect(located).toEqual(['sldprt']);
+});
