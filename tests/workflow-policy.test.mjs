@@ -328,6 +328,12 @@ describe('CI workflow policy', () => {
           body.includes("echo 'SCCACHE_GHA_ENABLED=true'"),
           `${name} must use the Actions cache backend`,
         );
+        // The idle timer ignores compiles in flight, so the default 600 s
+        // shuts the server down inside the longest codec and final crate.
+        assert(
+          body.includes("echo 'SCCACHE_IDLE_TIMEOUT=0'"),
+          `${name} must keep the sccache server up for the whole job`,
+        );
         const setup = body.indexOf(`uses: ${sccache}`);
         const wrapper = body.indexOf("echo 'RUSTC_WRAPPER=sccache'");
         const compile =
