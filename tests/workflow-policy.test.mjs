@@ -140,6 +140,64 @@ const packagesReachedBy = (script) => {
   return [...packages].sort(byText);
 };
 
+/** Every native build row preflight declares, as source text. */
+const buildRows = () => {
+  const rows = [...job('preflight').matchAll(/\{ target: '[^}]*\}/gu)].map((match) => match[0]);
+  assert(rows.length > 0, 'preflight must declare the native build rows');
+  return rows;
+};
+
+const buildRow = (target) => {
+  const row = buildRows().find((candidate) => candidate.includes(`target: '${target}'`));
+  assert(row, `the native build rows must contain ${target}`);
+  return row;
+};
+
+/**
+ * Run preflight's matrix step the way the runner does, from the repository
+ * root, and return the outputs it writes.
+ */
+const preflightMatrix = (environment) => {
+  const step =
+    /- id: matrix\n[\s\S]*?node --input-type=module <<'NODE' >> "\$GITHUB_OUTPUT"\n([\s\S]*?)\n {10}NODE\n/u.exec(
+      job('preflight'),
+    );
+  assert(step, 'preflight must emit its matrices from one inline module');
+  const source = step[1].replace(/^ {10}/gmu, '');
+  const output = execFileSync(process.execPath, ['--input-type=module'], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, NPM_PUBLISH: 'false', ...environment },
+    input: source,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const values = Object.fromEntries(
+    output
+      .trim()
+      .split('\n')
+      .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+  );
+  return { native: JSON.parse(values.native), smoke: JSON.parse(values.smoke), subset: values.subset };
+};
+
+const REPRESENTATIVE_TARGETS = [
+  'aarch64-apple-darwin',
+  'aarch64-unknown-linux-gnu',
+  'x86_64-pc-windows-msvc',
+  'x86_64-unknown-linux-gnu',
+];
+
+const COMPLETE_RUNS = [
+  { EVENT_NAME: 'push', KIND: 'main' },
+  { EVENT_NAME: 'push', KIND: 'release', NPM_PUBLISH: 'true' },
+  { EVENT_NAME: 'workflow_dispatch', KIND: 'dispatch' },
+];
+
+const PULL_REQUEST_RUNS = [
+  { EVENT_NAME: 'pull_request', KIND: 'pull-request' },
+  { EVENT_NAME: 'pull_request', KIND: 'release-pull-request' },
+];
+
 const smokeMatrix = () => {
   const rows = [...job('preflight').matchAll(/\{\s*suffix:[^}]*\}/gu)].map((match) => match[0]);
   assert(rows.length > 0, 'preflight must build the smoke matrix rows');
@@ -148,17 +206,49 @@ const smokeMatrix = () => {
 
 describe('CI workflow policy', () => {
   describe('build matrix', () => {
-    it('should build exactly the sixteen configured napi targets', () => {
+    it('should declare exactly the sixteen configured napi targets', () => {
       const targets = packageJson.napi.targets;
       assert.equal(targets.length, 16);
-      const body = job('build');
-      const matrixTargets = [...body.matchAll(/^ {10}- target: (\S+)$/gmu)].map((match) => match[1]);
+      const matrixTargets = buildRows().map((row) => /target: '([^']+)'/u.exec(row)?.[1]);
       const byName = (left, right) => left.localeCompare(right);
       assert.deepEqual([...matrixTargets].sort(byName), [...targets].sort(byName));
+      assert(
+        job('build').includes('include: ${{ fromJSON(needs.preflight.outputs.native-matrix) }}'),
+        'the build matrix must be the rows preflight emits',
+      );
+    });
+
+    it('should build all sixteen targets with the release profile on main, release, and dispatch', () => {
+      const byName = (left, right) => left.localeCompare(right);
+      for (const run of COMPLETE_RUNS) {
+        const { native, subset } = preflightMatrix(run);
+        assert.deepEqual(
+          native.map(({ target }) => target).sort(byName),
+          [...packageJson.napi.targets].sort(byName),
+          `${run.KIND} must build every configured target`,
+        );
+        assert(native.every(({ profile }) => profile === 'release'));
+        assert.equal(subset, '', `${run.KIND} must assemble and validate every target`);
+      }
+    });
+
+    it('should build only the four representative targets on a pull request', () => {
+      for (const run of PULL_REQUEST_RUNS) {
+        const { native, subset } = preflightMatrix(run);
+        assert.deepEqual(native.map(({ target }) => target).sort(), REPRESENTATIVE_TARGETS);
+        assert(native.every(({ profile }) => profile === 'pull-request'));
+        assert.deepEqual(subset.split(',').sort(), REPRESENTATIVE_TARGETS);
+      }
+    });
+
+    it('should refuse a publishing run that builds a target subset', () => {
+      assert.throws(
+        () => preflightMatrix({ EVENT_NAME: 'pull_request', KIND: 'pull-request', NPM_PUBLISH: 'true' }),
+        /must build every native target/u,
+      );
     });
 
     it('should cross-build the five glibc targets with the napi cross toolchain', () => {
-      const body = job('build');
       const glibc = [
         'x86_64-unknown-linux-gnu',
         'aarch64-unknown-linux-gnu',
@@ -167,11 +257,9 @@ describe('CI workflow policy', () => {
         's390x-unknown-linux-gnu',
       ];
       for (const target of glibc) {
-        const row = new RegExp(`- target: ${target}\\n(?: {12}.*\\n)+`, 'u').exec(body);
-        assert(row, `build matrix must contain ${target}`);
-        assert(row[0].includes("cross: '--use-napi-cross'"), `${target} must use --use-napi-cross`);
+        assert(buildRow(target).includes("cross: '--use-napi-cross'"), `${target} must use --use-napi-cross`);
       }
-      assert.equal(occurrences(body, "cross: '--use-napi-cross'"), glibc.length);
+      assert.equal(occurrences(job('preflight'), "cross: '--use-napi-cross'"), glibc.length);
     });
 
     it('should cross-build the three musl targets through cargo-zigbuild', () => {
@@ -182,26 +270,78 @@ describe('CI workflow policy', () => {
         'armv7-unknown-linux-musleabihf',
       ];
       for (const target of musl) {
-        const row = new RegExp(`- target: ${target}\\n(?: {12}.*\\n)+`, 'u').exec(body);
-        assert(row, `build matrix must contain ${target}`);
-        assert(row[0].includes("cross: '-x'"), `${target} must cross compile with -x`);
+        assert(buildRow(target).includes("cross: '-x'"), `${target} must cross compile with -x`);
       }
-      assert.equal(occurrences(body, "cross: '-x'"), musl.length);
+      assert.equal(occurrences(job('preflight'), "cross: '-x'"), musl.length);
       assert(body.includes('version: 0.15.2'), 'musl rows must pin Zig 0.15.2');
       assert(body.includes('tool: cargo-zigbuild'), 'musl rows must install cargo-zigbuild');
     });
 
-    it('should relax link-time optimization only on the i686 Windows row', () => {
+    it('should relax link-time optimization in the release profile only on the i686 Windows row', () => {
       const body = job('build');
-      assert.equal(occurrences(workflow, 'CARGO_PROFILE_RELEASE_LTO=false'), 1);
       assert.equal(occurrences(workflow, 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32'), 1);
       const step =
-        /- name: [^\n]*\n(?: {8}.*\n)*? {8}if: matrix\.target == 'i686-pc-windows-msvc'\n(?: {8}.*\n)+/u.exec(
+        /- name: [^\n]*\n(?: {8}.*\n)*? {8}if: matrix\.profile == 'release' && matrix\.target == 'i686-pc-windows-msvc'\n(?: {8}.*\n)+?(?= {6}\S)/u.exec(
           body,
         );
-      assert(step, 'the i686 override must be guarded by a matrix.target condition');
+      assert(step, 'the i686 override must be guarded by the release profile and a matrix.target condition');
       assert(step[0].includes('CARGO_PROFILE_RELEASE_LTO=false'));
       assert(step[0].includes('CARGO_PROFILE_RELEASE_CODEGEN_UNITS=32'));
+    });
+
+    it('should trade link-time optimization for build time only on pull request rows', () => {
+      const body = job('build');
+      // The i686 release override and the pull request profile are the only two.
+      assert.equal(occurrences(workflow, 'CARGO_PROFILE_RELEASE_LTO=false'), 2);
+      assert.equal(occurrences(workflow, 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16'), 1);
+      const step =
+        /- name: [^\n]*\n {8}if: matrix\.profile == 'pull-request'\n(?: {8}.*\n)+?(?= {6}\S)/u.exec(body);
+      assert(step, 'the pull request profile must be guarded by matrix.profile');
+      assert(step[0].includes('CARGO_PROFILE_RELEASE_LTO=false'));
+      assert(step[0].includes('CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16'));
+    });
+
+    it('should keep the macOS and FreeBSD memory relaxations of the release profile', () => {
+      const body = job('build');
+      const macos =
+        /- name: Fit the addon build in the macOS runner's memory\n(?: {8}.*\n)+?(?= {6}\S)/u.exec(body);
+      assert(macos, 'the macOS rows must fit the runner memory');
+      assert(macos[0].includes("echo 'CARGO_BUILD_JOBS=2'"));
+      assert(
+        /if \[\[ "\$PROFILE" == release \]\]; then\n\s+echo 'CARGO_PROFILE_RELEASE_LTO=thin'/u.test(macos[0]),
+        'macOS keeps thin LTO in the release profile',
+      );
+      assert(body.includes('export CARGO_BUILD_JOBS=1'));
+      assert(body.includes('export CARGO_PROFILE_RELEASE_LTO=thin'));
+    });
+
+    it('should compile the native and WebAssembly rows through sccache on the Actions cache', () => {
+      const [sccache] = [...workflow.matchAll(/uses: (mozilla-actions\/sccache-action@[0-9a-f]{40})/gu)].map(
+        (match) => match[1],
+      );
+      assert(sccache, 'the builds must set up sccache');
+      for (const name of ['build', 'build-wasm']) {
+        const body = job(name);
+        assert.equal(occurrences(body, `uses: ${sccache}`), 1, `${name} must set up sccache once`);
+        assert(body.includes("echo 'RUSTC_WRAPPER=sccache'"), `${name} must route rustc through sccache`);
+        assert(
+          body.includes("echo 'SCCACHE_GHA_ENABLED=true'"),
+          `${name} must use the Actions cache backend`,
+        );
+        const setup = body.indexOf(`uses: ${sccache}`);
+        const wrapper = body.indexOf("echo 'RUSTC_WRAPPER=sccache'");
+        const compile =
+          name === 'build' ? body.indexOf('pnpm exec napi build') : body.indexOf('pnpm run build:wasm');
+        assert(setup < wrapper && wrapper < compile, `${name} must install sccache before it compiles`);
+      }
+      // The FreeBSD guest has no sccache, so neither step applies to its row.
+      const body = job('build');
+      const guard = "\n        if: matrix.target != 'x86_64-unknown-freebsd'\n";
+      assert(body.includes(`uses: ${sccache} # v0.0.11${guard}`), 'the FreeBSD row must not set up sccache');
+      assert(
+        body.includes(`- name: Route rustc through sccache${guard}`),
+        'the FreeBSD row must not wrap rustc',
+      );
     });
 
     it('should upload one bindings artifact per target with an error on an empty match', () => {
@@ -227,6 +367,33 @@ describe('CI workflow policy', () => {
         assert(body.includes(command), `assemble must run: ${command}`);
       }
       assert(body.includes('pattern: bindings-*'));
+    });
+
+    it('should assemble and validate exactly the subset a pull request built', () => {
+      const body = job('assemble');
+      assert(body.includes('NATIVE_SUBSET: ${{ needs.preflight.outputs.native-subset }}'));
+      assert(body.includes("if: env.NATIVE_SUBSET != ''"), 'only a subset run may scope the napi config');
+      for (const command of [
+        'pnpm exec napi create-npm-dirs --npm-dir npm',
+        'pnpm exec napi artifacts --output-dir artifacts --npm-dir npm',
+        'pnpm exec napi pre-publish --skip-optional-publish -t npm --no-gh-release',
+      ]) {
+        const line = body.slice(body.indexOf(command)).split(/\n(?! {10}\$)/u)[0];
+        assert(
+          line.includes('${NAPI_CONFIG:+--config-path "$NAPI_CONFIG"}'),
+          `${command} must follow the subset config`,
+        );
+      }
+      for (const script of [
+        'node scripts/inspect-native.mjs',
+        'node scripts/check-prepared-release.mjs',
+        'node scripts/pack-test-tarballs.mjs --out tarballs',
+      ]) {
+        assert(
+          body.includes(`${script} \${NATIVE_SUBSET:+--targets "$NATIVE_SUBSET"}`),
+          `${script} must validate exactly the built subset`,
+        );
+      }
     });
 
     it('should assert the shipped entry graphs against the freshly built output', () => {
@@ -280,7 +447,9 @@ describe('CI workflow policy', () => {
     it('should run the fast smoke rows on every event and the slow rows on main, release, or dispatch', () => {
       const body = job('preflight');
       assert(
-        /slow\s*=\s*kind === 'main' \|\| kind === 'release' \|\| event === 'workflow_dispatch'/u.test(body),
+        /complete\s*=\s*kind === 'main' \|\| kind === 'release' \|\| event === 'workflow_dispatch'/u.test(
+          body,
+        ),
         'preflight must gate the slow smoke rows on the release cadence',
       );
       for (const suffix of [
@@ -338,6 +507,29 @@ describe('CI workflow policy', () => {
       assert(body.includes('CADMPEG_TS_NATIVE_SUFFIX'));
       assert(body.includes('node scripts/test-package.mjs'));
       assert(body.includes('name: smoke (${{ matrix.suffix }}, ${{ matrix.lane }})'));
+    });
+
+    it('should smoke every row on a complete run and only built, fast rows on a pull request', () => {
+      for (const run of COMPLETE_RUNS) {
+        assert.equal(preflightMatrix(run).smoke.length, smokeMatrix().length, `${run.KIND} smokes every row`);
+      }
+      const built = new Set(['darwin-arm64', 'linux-arm64-gnu', 'linux-x64-gnu', 'win32-x64-msvc']);
+      for (const run of PULL_REQUEST_RUNS) {
+        const { smoke } = preflightMatrix(run);
+        assert(smoke.length > 0);
+        assert(
+          smoke.every((row) => built.has(row.suffix) && !row.slow),
+          'a pull request smokes built rows only',
+        );
+        assert.deepEqual(
+          new Set(smoke.map(({ suffix }) => suffix)),
+          built,
+          'every built target needs a smoke row',
+        );
+      }
+      const body = job('smoke');
+      assert(body.includes('CADMPEG_TS_NATIVE_TARGETS: ${{ needs.preflight.outputs.native-subset }}'));
+      assert(body.includes('--env CADMPEG_TS_NATIVE_TARGETS \\'), 'the container rows must see the subset');
     });
 
     it('should run the unit tests on the supported Node floor and the current line', () => {
@@ -437,6 +629,18 @@ describe('CI workflow policy', () => {
         'the root guard must treat an existing version as success',
       );
       assert(body.includes('node scripts/validate-pack.mjs'));
+    });
+
+    it('should publish only a frozen tree that holds every configured target', () => {
+      const body = job('publish');
+      const check = body.indexOf('node scripts/check-prepared-release.mjs --root release\n');
+      assert.notEqual(check, -1, 'publish must re-assert the complete sixteen-target tree');
+      assert(
+        check < body.indexOf('pnpm exec napi pre-publish --cwd release'),
+        'the completeness check must precede the first publish',
+      );
+      assert(!body.includes('--targets'), 'publish must never validate a target subset');
+      assert(!body.includes('native-subset'), 'publish must never read the pull request subset');
     });
 
     it('should publish every platform package before the root package', () => {

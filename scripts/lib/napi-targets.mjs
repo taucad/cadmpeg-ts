@@ -102,3 +102,48 @@ export const readNapiTargets = (packageJsonPath) => {
     }),
   };
 };
+
+/**
+ * Read an explicit target subset from a comma-separated list of triples.
+ *
+ * A pull request builds a few representative targets rather than all of them,
+ * and the assembly scripts then validate exactly that subset. The list is the
+ * explicit opt-in: a script that receives none validates every configured
+ * target, which is the only mode a publishing run uses.
+ *
+ * @param {string} value - Comma-separated Rust target triples.
+ * @returns {string[]} The named triples, in the order given.
+ */
+export const parseTargetList = (value) => {
+  const triples = String(value)
+    .split(',')
+    .map((triple) => triple.trim())
+    .filter(Boolean);
+  if (triples.length === 0) throw new Error('a target subset must name at least one target triple');
+  return triples;
+};
+
+/**
+ * Narrow the configured platform packages to an explicit target subset.
+ *
+ * With no subset this returns every configured package. A subset must name
+ * configured triples only, each once, so a typo cannot quietly shrink what a
+ * run validates.
+ *
+ * @template {{ triple: string }} T
+ * @param {T[]} packages - Configured platform packages from {@link readNapiTargets}.
+ * @param {string[] | undefined} triples - Target subset, or `undefined` for every target.
+ * @returns {T[]} The selected packages, in configured order.
+ */
+export const selectTargets = (packages, triples) => {
+  if (triples === undefined) return packages;
+  if (triples.length === 0) throw new Error('a target subset must name at least one target triple');
+  const configured = new Set(packages.map(({ triple }) => triple));
+  const named = new Set();
+  for (const triple of triples) {
+    if (!configured.has(triple)) throw new Error(`${triple} is not a configured napi target`);
+    if (named.has(triple)) throw new Error(`${triple} is named twice in the target subset`);
+    named.add(triple);
+  }
+  return packages.filter(({ triple }) => named.has(triple));
+};

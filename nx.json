@@ -37,7 +37,16 @@
         "SECURITY.md",
         "osv-scanner.toml",
         ".github/**",
-        "tests/**"
+        "tests/**",
+        "nx.json",
+        "scripts/check-prepared-release.mjs",
+        "scripts/inspect-native.mjs",
+        "scripts/lib/napi-targets.mjs",
+        "scripts/pack-test-tarballs.mjs",
+        "scripts/registry-wait.mjs",
+        "scripts/test-package.mjs",
+        "scripts/verify-preview-install.mjs",
+        "scripts/verify-release-attestations.mjs"
       ]
     },
     "changelog": {

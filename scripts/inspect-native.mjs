@@ -7,7 +7,7 @@ import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { readNapiTargets } from './lib/napi-targets.mjs';
+import { parseTargetList, readNapiTargets, selectTargets } from './lib/napi-targets.mjs';
 
 const TOOL_OUTPUT_LIMIT = 64 * 1024 * 1024;
 const EF_ARM_ABI_FLOAT_HARD = 0x400;
@@ -469,10 +469,20 @@ const collectNativeBinaries = (npmDirectory) => {
   return found;
 };
 
-export const inspectNative = ({ cwd = process.cwd(), npmDir = 'npm', packageJsonPath } = {}) => {
+/**
+ * Inspect every native binary under `npmDir` against the configured targets.
+ *
+ * `targets` names an explicit subset of target triples, the ones a pull request
+ * built: exactly those binaries must be present and any other is a stray. With
+ * no subset every configured target must be present.
+ */
+export const inspectNative = ({ cwd = process.cwd(), npmDir = 'npm', packageJsonPath, targets } = {}) => {
   const root = resolve(cwd);
   const npmDirectory = resolve(root, npmDir);
-  const { packages } = readNapiTargets(resolve(root, packageJsonPath ?? 'package.json'));
+  const packages = selectTargets(
+    readNapiTargets(resolve(root, packageJsonPath ?? 'package.json')).packages,
+    targets,
+  );
   const toolDirectory = resolveToolDirectory(root);
 
   const expected = new Map(
@@ -519,12 +529,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     options: {
       'npm-dir': { default: 'npm', type: 'string' },
       'package-json': { default: 'package.json', type: 'string' },
+      targets: { type: 'string' },
     },
   });
   try {
     const { findings, inventory } = inspectNative({
       npmDir: values['npm-dir'],
       packageJsonPath: values['package-json'],
+      targets: values.targets === undefined ? undefined : parseTargetList(values.targets),
     });
     process.stdout.write(`${JSON.stringify(inventory, null, 2)}\n`);
     for (const finding of findings) {

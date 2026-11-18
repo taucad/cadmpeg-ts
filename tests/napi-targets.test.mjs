@@ -11,7 +11,12 @@ import { describe, it } from 'node:test';
 
 import { parseTriple as parseTripleWithCli } from '@napi-rs/cli';
 
-import { parseTriple, readNapiTargets } from '../scripts/lib/napi-targets.mjs';
+import {
+  parseTargetList,
+  parseTriple,
+  readNapiTargets,
+  selectTargets,
+} from '../scripts/lib/napi-targets.mjs';
 
 const manifestUrl = new URL('../package.json', import.meta.url);
 const TARGETS = JSON.parse(readFileSync(manifestUrl, 'utf8')).napi.targets;
@@ -56,5 +61,46 @@ describe('napi target derivation', () => {
       ['linux-x64-musl', 'musl'],
       ['linux-arm64-musl', 'musl'],
     ]);
+  });
+});
+
+describe('napi target subsets', () => {
+  const { packages } = readNapiTargets(manifestUrl);
+
+  it('should read a comma-separated subset in the order given', () => {
+    assert.deepEqual(parseTargetList(' x86_64-unknown-linux-gnu,aarch64-apple-darwin ,'), [
+      'x86_64-unknown-linux-gnu',
+      'aarch64-apple-darwin',
+    ]);
+  });
+
+  it('should refuse a subset that names nothing', () => {
+    for (const value of ['', ' , ']) {
+      assert.throws(() => parseTargetList(value), /must name at least one target triple/u);
+    }
+  });
+
+  it('should select every configured target when no subset is named', () => {
+    assert.equal(selectTargets(packages, undefined), packages);
+  });
+
+  it('should select exactly the named targets in configured order', () => {
+    const selected = selectTargets(packages, ['x86_64-unknown-linux-gnu', 'aarch64-apple-darwin']);
+    assert.deepEqual(
+      selected.map(({ suffix }) => suffix),
+      ['darwin-arm64', 'linux-x64-gnu'],
+    );
+  });
+
+  it('should refuse an unconfigured, repeated, or empty subset', () => {
+    assert.throws(
+      () => selectTargets(packages, ['riscv64gc-unknown-linux-gnu']),
+      /is not a configured napi target/u,
+    );
+    assert.throws(
+      () => selectTargets(packages, ['aarch64-apple-darwin', 'aarch64-apple-darwin']),
+      /named twice/u,
+    );
+    assert.throws(() => selectTargets(packages, []), /must name at least one target triple/u);
   });
 });

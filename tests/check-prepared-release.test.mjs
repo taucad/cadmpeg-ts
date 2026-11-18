@@ -31,16 +31,25 @@ const written = [];
 
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 
-const createPreparedTree = () => {
+const SUBSET = [
+  'aarch64-apple-darwin',
+  'x86_64-pc-windows-msvc',
+  'x86_64-unknown-linux-gnu',
+  'aarch64-unknown-linux-gnu',
+];
+
+const createPreparedTree = (triples) => {
+  const selected =
+    triples === undefined ? packages : packages.filter(({ triple }) => triples.includes(triple));
   const root = mkdtempSync(join(tmpdir(), 'cadmpeg-ts-prepared-'));
   written.push(root);
   writeJson(join(root, 'package.json'), {
     ...manifest,
-    optionalDependencies: Object.fromEntries(packages.map(({ name }) => [name, version])),
+    optionalDependencies: Object.fromEntries(selected.map(({ name }) => [name, version])),
   });
   mkdirSync(join(root, 'dist', 'native'), { recursive: true });
   writeFileSync(join(root, 'dist', 'native', 'index.js'), 'export const nothing = 0;\n');
-  for (const target of packages) {
+  for (const target of selected) {
     const directory = join(root, 'npm', target.suffix);
     mkdirSync(directory, { recursive: true });
     writeJson(join(directory, 'package.json'), platformManifest(target));
@@ -51,7 +60,8 @@ const createPreparedTree = () => {
   return root;
 };
 
-const findingsFor = (root, packedFiles = PACKAGE_FILES) => preparedReleaseFindings({ packedFiles, root });
+const findingsFor = (root, packedFiles = PACKAGE_FILES, targets) =>
+  preparedReleaseFindings({ packedFiles, root, targets });
 
 const patchPlatformManifest = (root, suffix, patch) => {
   const target = packages.find((candidate) => candidate.suffix === suffix);
@@ -186,5 +196,50 @@ describe('prepared release completeness gate', () => {
     );
     assert.equal(findings.length, 1);
     assert.match(findings[0], /^root pack: npm package mismatch;.*missing=\[package\.json\]/u);
+  });
+});
+
+describe('prepared release completeness gate for a pull request subset', () => {
+  it('should accept a tree that holds exactly the named subset', () => {
+    const root = createPreparedTree(SUBSET);
+
+    assert.equal(readdirSync(join(root, 'npm')).length, 4);
+    assert.deepEqual(findingsFor(root, PACKAGE_FILES, SUBSET), []);
+  });
+
+  it('should reject a subset tree in the default mode, which demands every target', () => {
+    const findings = findingsFor(createPreparedTree(SUBSET));
+
+    assert.equal(findings.filter((finding) => finding.endsWith('/package.json is missing')).length, 12);
+    assert.equal(
+      findings.filter((finding) => /^root optionalDependencies: \S+ is missing$/u.test(finding)).length,
+      12,
+    );
+  });
+
+  it('should reject a subset tree that lost a built target', () => {
+    const root = createPreparedTree(SUBSET.slice(1));
+
+    assert.deepEqual(findingsFor(root, PACKAGE_FILES, SUBSET), [
+      'darwin-arm64: npm/darwin-arm64/package.json is missing',
+      'root optionalDependencies: cadmpeg-ts-darwin-arm64 is missing',
+    ]);
+  });
+
+  it('should reject a package or optional dependency outside the subset', () => {
+    const root = createPreparedTree();
+
+    const findings = findingsFor(root, PACKAGE_FILES, SUBSET);
+    assert.equal(
+      findings.filter((finding) => finding.endsWith('is not a configured target package')).length,
+      24,
+    );
+  });
+
+  it('should refuse a subset that names an unconfigured target', () => {
+    assert.throws(
+      () => findingsFor(createPreparedTree(SUBSET), PACKAGE_FILES, ['x86_64-unknown-netbsd']),
+      /x86_64-unknown-netbsd is not a configured napi target/u,
+    );
   });
 });
