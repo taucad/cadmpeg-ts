@@ -334,8 +334,20 @@ describe('CI workflow policy', () => {
           body.includes("echo 'SCCACHE_IDLE_TIMEOUT=0'"),
           `${name} must keep the sccache server up for the whole job`,
         );
+        // sccache is optional: an unavailable Actions cache must not fail the build.
+        const start = body.indexOf('if sccache --start-server; then');
+        assert(start !== -1, `${name} must start the sccache server before routing rustc through it`);
+        assert(
+          body.includes("echo '::warning::sccache could not start; compiling without it'"),
+          `${name} must compile without sccache when its server cannot start`,
+        );
+        assert(
+          body.includes("echo 'SCCACHE_IGNORE_SERVER_IO_ERROR=1'"),
+          `${name} must compile locally when the sccache server fails mid-job`,
+        );
         const setup = body.indexOf(`uses: ${sccache}`);
         const wrapper = body.indexOf("echo 'RUSTC_WRAPPER=sccache'");
+        assert(start < wrapper, `${name} must route rustc through sccache only after its server starts`);
         const compile =
           name === 'build' ? body.indexOf('pnpm exec napi build') : body.indexOf('pnpm run build:wasm');
         assert(setup < wrapper && wrapper < compile, `${name} must install sccache before it compiles`);
