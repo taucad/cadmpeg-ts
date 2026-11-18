@@ -352,7 +352,7 @@ import { readFile } from 'node:fs/promises';
 
 import { formatCauseChain, selectedPlatformPackages, settleLoaderSelection } from ${JSON.stringify(helperUrl)};
 
-const [phase, fixture] = process.argv.slice(2);
+const [phase, stepFixture, sldprtFixture] = process.argv.slice(2);
 // The WebAssembly modules use SIMD. V8 refuses it on some hosts (Node 22 on
 // ppc64le), where the wasm backend is unavailable and Node runs native only.
 // The probe is the smallest module that uses a v128 value.
@@ -385,11 +385,13 @@ try {
     const loaded = selectedPlatformPackages(process.report.getReport().sharedObjects, installed);
     console.log(settleLoaderSelection(loaded, expected, installed));
   } else {
-    const input = { name: 'part.stp', bytes: new Uint8Array(await readFile(fixture)) };
-    const native = await (await api.createCadmpeg({ backend: 'native' })).convert(input, { to: 'step' });
+    const input = { name: 'part.stp', bytes: new Uint8Array(await readFile(stepFixture)) };
+    const native = await api.createCadmpeg({ backend: 'native' });
+    const nativeStep = await native.convert(input, { to: 'step' });
+    assert.equal(nativeStep.backend, 'native');
+    assert.equal(nativeStep.files[0].name, 'part.step');
+    assert.equal(new TextDecoder().decode(nativeStep.files[0].bytes.subarray(0, 13)), 'ISO-10303-21;');
     if (!wasmSimd) {
-      assert.equal(native.backend, 'native');
-      assert.equal(new TextDecoder().decode(native.files[0].bytes.subarray(0, 13)), 'ISO-10303-21;');
       await assert.rejects(
         async () => (await api.createCadmpeg({ backend: 'wasm' })).convert(input, { to: 'step' }),
         (error) => error?.code === 'BACKEND_UNAVAILABLE',
@@ -398,15 +400,67 @@ try {
       console.log(\`converted \${input.bytes.length} bytes of STEP natively; wasm backend unavailable without SIMD\`);
       process.exit(0);
     }
-    const wasm = await (await api.createCadmpeg({ backend: 'wasm' })).convert(input, { to: 'step' });
-    assert.equal(native.backend, 'native');
-    assert.equal(wasm.backend, 'wasm');
-    assert.equal(native.files[0].name, 'part.step');
-    assert.equal(new TextDecoder().decode(native.files[0].bytes.subarray(0, 13)), 'ISO-10303-21;');
-    // Charter I2: one engine version, one input, identical bytes on both backends.
-    assert.deepEqual(native.files[0].bytes, wasm.files[0].bytes);
-    assert.deepEqual(native.losses, wasm.losses);
-    console.log(\`converted \${input.bytes.length} bytes of STEP; native and wasm outputs are byte-identical\`);
+    const wasm = await api.createCadmpeg({ backend: 'wasm' });
+    const { outputs } = await import('cadmpeg-ts/formats');
+    const settle = (promise) => promise.then((result) => ({ result }), (error) => ({ error }));
+    // Charter I2: one engine version, one input, identical bytes and equal
+    // reports on both backends, for every writer. A writer that refuses must
+    // refuse alike on both. \`exact\` names the writers held to that; the others
+    // are held to the same files and the same losses by code, phase and severity.
+    const lossKeys = (losses) => losses.map(({ code, phase, severity }) => \`\${phase} \${severity} \${code}\`);
+    const checkParity = async (label, file, exact) => {
+      const written = [];
+      for (const { id } of outputs) {
+        const a = await settle(native.convert(file, { to: id }));
+        const b = await settle(wasm.convert(file, { to: id }));
+        if (a.error || b.error) {
+          assert.ok(a.error && b.error, \`\${label} to \${id}: one backend refused, the other did not\`);
+          assert.deepEqual(
+            { code: b.error.code, phase: b.error.phase, message: b.error.message },
+            { code: a.error.code, phase: a.error.phase, message: a.error.message },
+            \`\${label} to \${id}: the backends refused differently\`,
+          );
+          continue;
+        }
+        assert.equal(a.result.backend, 'native');
+        assert.equal(b.result.backend, 'wasm');
+        assert.deepEqual(
+          b.result.files.map((f) => f.name),
+          a.result.files.map((f) => f.name),
+          \`\${label} to \${id}: file names differ\`,
+        );
+        if (exact(id)) {
+          assert.deepEqual(b.result.losses, a.result.losses, \`\${label} to \${id}: losses differ\`);
+          assert.deepEqual(b.result.notes, a.result.notes, \`\${label} to \${id}: notes differ\`);
+          a.result.files.forEach((f, index) =>
+            assert.deepEqual(b.result.files[index].bytes, f.bytes, \`\${label} to \${id}: bytes differ\`),
+          );
+        } else {
+          assert.deepEqual(lossKeys(b.result.losses), lossKeys(a.result.losses), \`\${label} to \${id}: losses differ\`);
+        }
+        written.push(id);
+      }
+      assert.ok(written.length > 0, \`\${label}: no writer accepted the input\`);
+      return written;
+    };
+    const fromStep = await checkParity('STEP', input, () => true);
+    assert.ok(fromStep.includes('step') && fromStep.includes('usd'), \`STEP wrote only \${fromStep.join(', ')}\`);
+    console.log(\`converted \${input.bytes.length} bytes of STEP to \${fromStep.join(', ')}; native and wasm outputs are byte-identical\`);
+    // Known exception (compatibility.md): several of the pinned cadmpeg's
+    // codecs, SOLIDWORKS among them, call the platform C library for sin, cos,
+    // atan2 and hypot, so the native addon and wasm32 (Rust's libm port) decode
+    // a few reals one or two ulps apart, and every writer that re-emits decoded
+    // geometry (STEP, CADIR, OpenUSD) differs in those digits. The fix is
+    // upstream: patches/candidate-portable-elementary-functions.md. The STEP
+    // fixture above does not drift. Until the fix lands, a SOLIDWORKS source is
+    // held exactly only where the writer rewrites it (SLDPRT); elsewhere the
+    // drift also reaches byte counts in notes and could reach loss messages.
+    // It still exercises the native-to-native route that crosses modules as
+    // STEP, whose losses differ wholesale when the backends route differently.
+    const sldprt = { name: 'part.sldprt', bytes: new Uint8Array(await readFile(sldprtFixture)) };
+    const fromSldprt = await checkParity('SOLIDWORKS', sldprt, (id) => id === 'sldprt');
+    assert.ok(fromSldprt.includes('usd'), \`SOLIDWORKS wrote only \${fromSldprt.join(', ')}\`);
+    console.log(\`converted \${sldprt.bytes.length} bytes of SOLIDWORKS to \${fromSldprt.join(', ')}; native and wasm losses match\`);
   }
 } catch (error) {
   console.error(\`\${phase} phase failed:\`);
@@ -438,7 +492,7 @@ const main = () => {
     throw new Error(`${suffix} is outside the assembled target subset ${subset.join(', ')}`);
   }
   const platformName = rule.expected;
-  const fixture = fileURLToPath(new URL('../tests/fixtures/nist_ctc_01_asme1_ap242-e1.stp', import.meta.url));
+  const fixture = (name) => fileURLToPath(new URL(`../tests/fixtures/${name}`, import.meta.url));
   const work = mkdtempSync(join(tmpdir(), 'cadmpeg-ts-package-'));
 
   try {
@@ -490,7 +544,11 @@ const main = () => {
         stdio: 'inherit',
       });
     runConsumer('load');
-    runConsumer('convert', fixture);
+    runConsumer(
+      'convert',
+      fixture('nist_ctc_01_asme1_ap242-e1.stp'),
+      fixture('nist_ftc_06_asme1_rd_sw1802.SLDPRT'),
+    );
 
     writeFileSync(join(work, 'consumer.cjs'), cjsProbeSource);
     execFileSync(process.execPath, ['consumer.cjs'], { cwd: work, stdio: 'inherit' });

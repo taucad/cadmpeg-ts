@@ -4,9 +4,10 @@
 
 import { endianness } from 'node:os';
 
-import type { Engine } from '#engine.js';
-import { parseReport } from '#engine.js';
+import type { Engine, EngineConversion } from '#engine.js';
+import { joinLegs, parseReport } from '#engine.js';
 import { CadmpegError, fromEngine } from '#errors.js';
+import { crossesAsStep, inputs, writerModule } from '#formats.js';
 
 /**
  * The addon surface `rust/binding-napi` exports.
@@ -15,6 +16,7 @@ import { CadmpegError, fromEngine } from '#errors.js';
  */
 export type Addon = {
   convert: (input: Buffer, to: string) => Promise<{ bytes: Buffer; report: string }>;
+  detect: (input: Buffer) => string | null | undefined;
 };
 
 /**
@@ -49,11 +51,10 @@ const currentHost = (): NativeHost => ({
  * @param addon - The loaded addon.
  * @returns The native engine.
  */
-export const createNativeEngine = (addon: Addon): Engine => ({
-  backend: 'native',
-  async convert(bytes, _name, to) {
+export const createNativeEngine = (addon: Addon): Engine => {
+  const run = async (input: Buffer, to: string): Promise<EngineConversion> => {
     try {
-      const result = await addon.convert(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), to);
+      const result = await addon.convert(input, to);
       return {
         bytes: new Uint8Array(result.bytes.buffer, result.bytes.byteOffset, result.bytes.byteLength),
         report: parseReport(result.report),
@@ -61,8 +62,29 @@ export const createNativeEngine = (addon: Addon): Engine => ({
     } catch (error) {
       throw fromEngine(error);
     }
-  },
-});
+  };
+
+  return {
+    backend: 'native',
+    async convert(bytes, _name, to) {
+      const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const format = to.replace(/:.*$/su, '');
+      // STEP and CADIR are written by every module, so no route to them crosses.
+      if (writerModule(format, 'step') === 'step') return run(input, to);
+      // The addon carries every codec, but the wasm backend's writer module
+      // may not read the source; take the same STEP crossing so both backends
+      // write the same bytes (charter D11, I2).
+      const detected = addon.detect(input);
+      const source = inputs.find((candidate) => candidate.id === detected)?.module;
+      if (source === undefined || !crossesAsStep(format, source)) return run(input, to);
+      const step = await run(input, 'step');
+      return joinLegs(
+        step,
+        await run(Buffer.from(step.bytes.buffer, step.bytes.byteOffset, step.bytes.byteLength), to),
+      );
+    },
+  };
+};
 
 /**
  * Load the addon the generated loader selects for this host.

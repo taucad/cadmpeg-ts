@@ -84,6 +84,17 @@ describe('createWasmEngine', () => {
     });
   });
 
+  it('hands STEP input straight to a writer in another module, as the native addon does', async () => {
+    const step = fakeGlue('step');
+    const usd = fakeGlue('usd');
+    const { engine, loadGlue } = engineWith({ step: step.glue, usd: usd.glue });
+    const result = await engine.convert(stepBytes, 'part.step', 'usd');
+    expect(usd.glue.convert).toHaveBeenCalledExactlyOnceWith(stepBytes, 'usd');
+    expect(loadGlue).not.toHaveBeenCalledWith('step');
+    expect(new TextDecoder().decode(result.bytes)).toBe('usd:usd');
+    expect(result.report.losses.map((loss) => loss.code)).toEqual(['usd/loss']);
+  });
+
   it('routes by name when the bytes are long enough to sniff but are not STEP', async () => {
     const { engine, loadGlue } = engineWith({ sldprt: fakeGlue('sldprt').glue });
     const result = await engine.convert(encoder.encode('ISO-10303-22; not a header'), 'part.sldprt', 'step');
