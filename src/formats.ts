@@ -118,6 +118,22 @@ export const writerModule = (format: string, source: ModuleId): ModuleId => {
 };
 
 /**
+ * Whether a conversion hands its writer STEP bytes instead of the input
+ * (charter D11): the writer lives in a module that cannot read the source.
+ * Every module reads STEP and CADIR, so those inputs always go straight to the
+ * writer. Both backends take this route, so their outputs stay byte-identical
+ * (charter I2).
+ *
+ * @param format - Output format id.
+ * @param source - The module that reads the input.
+ * @returns `true` when the route crosses modules as STEP bytes.
+ */
+export const crossesAsStep = (format: string, source: ModuleId): boolean => {
+  const [codec] = modules[source];
+  return !(modules[writerModule(format, source)] as readonly string[]).includes(codec);
+};
+
+/**
  * The extension a written file of `format` gets.
  *
  * @param format - Output format id.

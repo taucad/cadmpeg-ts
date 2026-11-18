@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { candidateModules, inputs, modules, outputExtension, outputs, writerModule } from '#formats.js';
+import {
+  candidateModules,
+  crossesAsStep,
+  inputs,
+  modules,
+  outputExtension,
+  outputs,
+  writerModule,
+} from '#formats.js';
 
 describe('formats', () => {
   it('maps every input to a module that carries its codec', () => {
@@ -34,6 +42,17 @@ describe('formats', () => {
     expect(writerModule('iges', 'sldprt')).toBe('iges');
     expect(writerModule('rhino', 'step')).toBe('rhino');
     expect(writerModule('obj', 'step')).toBe('step');
+  });
+
+  it('crosses as STEP only when the writer module cannot read the source', () => {
+    expect(crossesAsStep('usd', 'step')).toBe(false);
+    expect(crossesAsStep('rhino', 'step')).toBe(false);
+    expect(crossesAsStep('step', 'sldprt')).toBe(false);
+    expect(crossesAsStep('cadir', 'catia')).toBe(false);
+    expect(crossesAsStep('sldprt', 'sldprt')).toBe(false);
+    expect(crossesAsStep('usd', 'sldprt')).toBe(true);
+    expect(crossesAsStep('rhino', 'creo')).toBe(true);
+    expect(crossesAsStep('obj', 'sldprt')).toBe(false);
   });
 
   it('names output extensions', () => {

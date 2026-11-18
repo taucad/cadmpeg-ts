@@ -73,3 +73,23 @@ export type Engine = {
  * @returns The typed report.
  */
 export const parseReport = (json: string): EngineReport => JSON.parse(json) as EngineReport;
+
+/**
+ * Join the two legs of a route that crosses modules as STEP bytes (charter
+ * D11): the written file is the second leg's, and the report names the source
+ * format and lists both legs' losses and notes, first leg first.
+ *
+ * @internal
+ * @param step - The source-to-STEP leg.
+ * @param written - The STEP-to-target leg.
+ * @returns The joined conversion.
+ */
+export const joinLegs = (step: EngineConversion, written: EngineConversion): EngineConversion => ({
+  bytes: written.bytes,
+  report: {
+    from: step.report.from,
+    to: written.report.to,
+    losses: [...step.report.losses, ...written.report.losses],
+    notes: [...step.report.notes, ...written.report.notes],
+  },
+});

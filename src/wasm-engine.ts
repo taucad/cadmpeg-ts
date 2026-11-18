@@ -4,9 +4,9 @@
  */
 
 import { CadmpegError, fromEngine } from '#errors.js';
-import type { Engine, EngineConversion, EngineReport } from '#engine.js';
-import { parseReport } from '#engine.js';
-import { candidateModules, writerModule, type ModuleId } from '#formats.js';
+import type { Engine, EngineConversion } from '#engine.js';
+import { joinLegs, parseReport } from '#engine.js';
+import { candidateModules, crossesAsStep, writerModule, type ModuleId } from '#formats.js';
 
 /** What `locateModule` may return for a module's WebAssembly binary. */
 export type ModuleSource =
@@ -135,18 +135,12 @@ export const createWasmEngine = (loadGlue: LoadGlue, locateModule: LocateModule)
       const source = await chooseModule(bytes, name);
       const format = to.replace(/:.*$/su, '');
       const writer = writerModule(format, source);
-      if (writer === source) return run(source, bytes, to);
-      // The writer lives in another module: hand it STEP bytes, never the IR
-      // (charter D11, F11), and report both legs' losses.
+      // Every module reads STEP and CADIR, so those inputs go straight to the
+      // writer, as on the native addon. Only a writer that cannot read the
+      // source gets STEP bytes, never the IR (charter D11, F11).
+      if (!crossesAsStep(format, source)) return run(writer, bytes, to);
       const step = await run(source, bytes, 'step');
-      const written = await run(writer, step.bytes, to);
-      const report: EngineReport = {
-        from: step.report.from,
-        to: written.report.to,
-        losses: [...step.report.losses, ...written.report.losses],
-        notes: [...step.report.notes, ...written.report.notes],
-      };
-      return { bytes: written.bytes, report };
+      return joinLegs(step, await run(writer, step.bytes, to));
     },
   };
 };

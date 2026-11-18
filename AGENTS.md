@@ -27,7 +27,8 @@ codec, while the browser gets one wasm module per format family (the codec plus
 the STEP writer) and a STEP-only module. `src/formats.ts` owns the module table;
 `scripts/build-wasm.mjs` reads it, and `src/wasm-engine.ts` routes a file to its
 module by extension, a STEP header sniff, or a detector for ambiguous `.prt`.
-A conversion between two native formats crosses modules as STEP bytes.
+A conversion whose writer module cannot read the source crosses modules as
+STEP bytes on both backends (`crossesAsStep`).
 
 `src/` is the ESM TypeScript facade. Its Node entry sits behind the `node`
 export condition and prefers the native addon; the default entry loads the wasm
