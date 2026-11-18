@@ -6,7 +6,8 @@ import { CadmpegError } from '#errors.js';
 import { modules, type ModuleId } from '#formats.js';
 import { packagedModuleUrl } from '#packaged.js';
 
-const stepGlue = {
+/** A fresh step glue: real glue is a module singleton, instantiated once per realm. */
+const stepGlue = () => ({
   default: vi.fn(async () => undefined),
   detect: vi.fn(() => 'step'),
   convert: vi.fn(() => ({
@@ -14,7 +15,7 @@ const stepGlue = {
     report: JSON.stringify({ from: 'step', to: 'step', losses: [], notes: [] }),
     free: () => undefined,
   })),
-};
+});
 const step = new TextEncoder().encode('ISO-10303-21;');
 const nativeEngine: Engine = {
   backend: 'native',
@@ -24,8 +25,8 @@ const nativeEngine: Engine = {
   }),
 };
 
-const host = (overrides: Partial<Host> = {}): Host => ({
-  loadGlue: async () => stepGlue,
+const host = (overrides: Partial<Host> = {}, glue = stepGlue()): Host => ({
+  loadGlue: async () => glue,
   locateModule: () => '/default',
   ...overrides,
 });
@@ -70,7 +71,7 @@ describe('createCadmpeg', () => {
 });
 
 describe('an entry point without a packaged locator', () => {
-  const core = () => bindHost({ loadGlue: async () => stepGlue });
+  const core = (glue = stepGlue()) => bindHost({ loadGlue: async () => glue });
 
   it.each(['auto', 'wasm'] as const)('refuses %s without locateModule', async (backend) => {
     await expect(core().createCadmpeg({ backend })).rejects.toMatchObject({
@@ -94,7 +95,8 @@ describe('an entry point without a packaged locator', () => {
   });
 
   it('keeps a native-capable host on the native backend with no locator', async () => {
-    const native = bindHost({ loadGlue: async () => stepGlue, loadNative: async () => nativeEngine });
+    const glue = stepGlue();
+    const native = bindHost({ loadGlue: async () => glue, loadNative: async () => nativeEngine });
     expect((await native.createCadmpeg()).backend).toBe('native');
   });
 });

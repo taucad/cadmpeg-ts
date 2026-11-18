@@ -58,6 +58,28 @@ describe('createWasmEngine', () => {
     expect(locateModule).toHaveBeenCalledWith('sldprt');
   });
 
+  it('locates a module once per glue, even across engines', async () => {
+    const sldprt = fakeGlue('sldprt');
+    const first = engineWith({ sldprt: sldprt.glue });
+    await first.engine.convert(encoder.encode('native'), 'part.sldprt', 'sldprt');
+    const second = engineWith({ sldprt: sldprt.glue });
+    await second.engine.convert(encoder.encode('native'), 'part.sldprt', 'sldprt');
+    expect(first.locateModule).toHaveBeenCalledOnce();
+    expect(second.locateModule).not.toHaveBeenCalled();
+    expect(sldprt.glue.default).toHaveBeenCalledOnce();
+  });
+
+  it('locates the module again when instantiation failed', async () => {
+    const sldprt = fakeGlue('sldprt');
+    vi.mocked(sldprt.glue.default).mockRejectedValueOnce(new Error('fetch failed'));
+    const { engine, locateModule } = engineWith({ sldprt: sldprt.glue });
+    await expect(engine.convert(encoder.encode('native'), 'part.sldprt', 'sldprt')).rejects.toMatchObject({
+      code: 'BACKEND_UNAVAILABLE',
+    });
+    await engine.convert(encoder.encode('native'), 'part.sldprt', 'sldprt');
+    expect(locateModule).toHaveBeenCalledTimes(2);
+  });
+
   it('routes STEP input to the step module without a name', async () => {
     const step = fakeGlue('step');
     const { engine } = engineWith({ step: step.glue });
