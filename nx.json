@@ -38,6 +38,7 @@
         "osv-scanner.toml",
         ".github/**",
         "tests/**",
+        "nx.json",
         "scripts/check-prepared-release.mjs",
         "scripts/inspect-native.mjs",
         "scripts/lib/napi-targets.mjs",
