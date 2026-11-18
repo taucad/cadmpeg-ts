@@ -8,12 +8,15 @@
 // bound with wasm-bindgen's `web` target as src/wasm/<id>.js and
 // src/wasm/<id>_bg.wasm, then optimized with the exact-pinned Binaryen. The
 // module table is src/formats.ts; this script reads it rather than repeat it.
+// The glue's default binary URL is removed (scripts/lib/wasm-glue.mjs), so no
+// bundler emits a binary for a glue file it reaches.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { stripDefaultModuleUrl } from './lib/wasm-glue.mjs';
 import { WASM_OPT_ARGS } from './lib/wasm-profile.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -94,6 +97,8 @@ for (const id of selected) {
     });
     renameSync(`${wasmPath}.opt`, wasmPath);
   }
+  const gluePath = resolve(output, `${id}.js`);
+  writeFileSync(gluePath, stripDefaultModuleUrl(readFileSync(gluePath, 'utf8'), id));
   rmSync(resolve(output, `${id}.d.ts`), { force: true });
   rmSync(resolve(output, `${id}_bg.wasm.d.ts`), { force: true });
   if (readFileSync(wasmPath).includes(Buffer.from(root))) throw new Error(`${id} embeds the checkout path`);
