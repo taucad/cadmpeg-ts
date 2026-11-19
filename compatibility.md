@@ -27,6 +27,14 @@ modules are built with SIMD, which Node 22 on ppc64le does not run: there the
 wasm backend refuses with `BACKEND_UNAVAILABLE` and Node uses the
 native addon. Node 26 on ppc64le runs both and is parity-checked.
 
+On s390x, `smoke` runs the WebAssembly side of the parity check with V8's
+baseline tier only (`--liftoff-only`). Under QEMU, V8's optimizing tier runs
+the SOLIDWORKS module wrongly once a function tiers up: Node 22 (22.13 and
+22.23) crashes with SIGSEGV, and Node 26 writes one byte differently from the
+same conversion on the baseline tier, the native addon and every other host.
+Whether real s390x hardware does the same is not verified. Node on s390x uses
+the native addon by default (`backend: 'auto'`); prefer it there.
+
 A conversion whose writer module cannot read the source, such as SolidWorks to
 OpenUSD, crosses modules as STEP bytes, and the native addon takes the same
 route so that both backends write the same file.
