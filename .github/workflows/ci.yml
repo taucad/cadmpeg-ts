@@ -408,6 +408,11 @@ jobs:
           # intermittently; thin LTO keeps cross-crate inlining at a fraction
           # of the memory. Only this row relaxes it.
           export CARGO_PROFILE_RELEASE_LTO=thin
+          # The 15.0 image's pkg asks for the `.tzst` catalogue, which the
+          # FreeBSD mirrors stopped serving (they serve `.pkg`, 2026-11). The
+          # base bootstrapper reinstalls the current pkg from Latest/pkg.pkg.
+          sudo -E ASSUME_ALWAYS_YES=yes /usr/sbin/pkg bootstrap -f
+          sudo -E pkg update -f
           sudo -E pkg install --yes node22 npm-node22 curl
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain none
@@ -712,6 +717,9 @@ jobs:
         run: |
           set -euo pipefail
           export IGNORE_OSVERSION=yes
+          # Same catalogue change as the build row: refresh pkg first.
+          sudo -E ASSUME_ALWAYS_YES=yes /usr/sbin/pkg bootstrap -f
+          sudo -E pkg update -f
           sudo -E pkg install --yes node22 npm-node22
           export CADMPEG_TS_NATIVE_SUFFIX=freebsd-x64
           export CADMPEG_TS_TARBALL_DIR=tarballs
