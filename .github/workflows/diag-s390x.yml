@@ -1,0 +1,30 @@
+# Diagnostic only (not for merge): which backend/writer segfaults on s390x Node 22.
+name: diag-s390x
+on:
+  pull_request:
+    paths: [.github/workflows/diag-s390x.yml, diag/**]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  sldprt:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.13.0', '26.7.0']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: test-tarballs
+          path: tarballs
+          run-id: 44454287319
+          github-token: ${{ github.token }}
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - run: >-
+          docker run --rm --platform linux/s390x --volume "$PWD:/cadmpeg-ts"
+          --env NODE=${{ matrix.node }} ubuntu:24.04 sh /cadmpeg-ts/diag/run.sh
