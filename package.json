@@ -1,6 +1,6 @@
 {
   "name": "cadmpeg-ts",
-  "version": "0.1.0-beta.3",
+  "version": "0.1.0-beta.4",
   "description": "Unofficial TypeScript API for cadmpeg: convert SOLIDWORKS, CATIA, Inventor, NX, Creo, Fusion, FreeCAD, Rhino, STEP and IGES files in browsers and Node.js.",
   "keywords": [
     "brep",
