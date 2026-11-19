@@ -710,6 +710,78 @@ describe('CI workflow policy', () => {
     });
   });
 
+  describe('engine release assets', () => {
+    it('should build the gzip engines and the digest map once, in assembly, and prove them there', () => {
+      const body = job('assemble');
+      const copy = body.indexOf('node scripts/copy-assets.mjs');
+      const verify = body.indexOf('node scripts/verify-engine-assets.mjs --package . --assets engine-assets');
+      const freeze = body.indexOf('name: Freeze the prepared release tree');
+      assert(copy !== -1 && verify !== -1 && copy < verify && verify < freeze);
+      assert(
+        body.includes('scripts/module-digests.mjs prepared/scripts/'),
+        'validate-pack needs its digest check',
+      );
+      assert(body.includes('name: engine-assets'));
+      assert(body.includes('path: engine-assets/'));
+      assert(
+        body.includes(
+          "retention-days: ${{ needs.preflight.outputs.kind == 'release' && 30 || 1 }}\n      - uses",
+        ),
+        'the engine assets must outlive a release run as long as the prepared archive',
+      );
+      for (const name of [
+        'copy-assets.mjs',
+        'build-wasm.mjs',
+        'verify-engine-assets.mjs',
+        'test-bundle.mjs',
+      ]) {
+        assert(job('release-assets').includes(name) === (name === 'verify-engine-assets.mjs'), name);
+      }
+    });
+
+    it('should count the engines a bundler emits through each packed entry before freezing', () => {
+      const body = job('assemble');
+      const bundle = body.indexOf('node scripts/test-bundle.mjs --tarballs tarballs');
+      assert(bundle > body.indexOf('node scripts/pack-test-tarballs.mjs --out tarballs'));
+      assert(bundle < body.indexOf('name: Freeze the prepared release tree'));
+    });
+
+    it('should attach and verify every asset on a draft release before npm publication', () => {
+      const body = job('release-assets');
+      assert.equal(body.includes("if: needs.preflight.outputs.npm-publish == 'true'"), true);
+      for (const dependency of ['preflight', 'assemble', 'docs-prose', 'smoke', 'browser', 'security']) {
+        assert(needsOf('release-assets').includes(dependency), `release-assets must need ${dependency}`);
+      }
+      assert(needsOf('publish').includes('release-assets'), 'a missing asset must publish nothing to npm');
+      assert(body.includes('expect: SHA256SUMS'));
+      assert(body.includes('sha256sum --check "$ARCHIVE.sha256"'));
+      const steps = [
+        'node scripts/verify-engine-assets.mjs --package release --assets engine-assets',
+        `gh release create "$tag" --draft --target '\${{ github.sha }}' --generate-notes`,
+        'gh release upload "$tag" "$file"',
+        'gh release download "v$VERSION" --pattern \'*_bg.wasm.gz\' --dir attached',
+        'node scripts/verify-engine-assets.mjs --package release --assets attached',
+      ];
+      const positions = steps.map((step) => body.indexOf(step));
+      for (const [index, position] of positions.entries()) assert.notEqual(position, -1, steps[index]);
+      assert.deepEqual(
+        [...positions].sort((left, right) => left - right),
+        positions,
+        'draft, attach, then verify',
+      );
+      assert.equal(occurrences(workflow, 'gh release create'), 1);
+      assert(body.includes('--draft'), 'the release stays a draft until the registry is verified');
+    });
+
+    it('should never replace an asset already on the release', () => {
+      assert(!workflow.includes('--clobber'));
+      assert(!workflow.includes('gh release delete-asset'));
+      assert(
+        job('release-assets').includes('grep --quiet --line-regexp --fixed-strings "$name" <<<"$attached"'),
+      );
+    });
+  });
+
   describe('registry verification', () => {
     it('should wait for registry visibility with a bounded backoff', () => {
       const body = job('registry-verify');
@@ -755,13 +827,23 @@ describe('CI workflow policy', () => {
       assert(body.includes('timeout-minutes: 60'), 'the emulated row needs a ceiling');
     });
 
-    it('should record the GitHub release only after every registry check passed', () => {
-      assert.equal(occurrences(workflow, 'gh release create'), 1);
-      const [name] = [...jobs].find(([, body]) => body.includes('gh release create'));
-      assert.equal(name, 'registry-release');
+    it('should publish the draft GitHub release only after every registry check passed', () => {
+      const body = job('registry-release');
       assert(needsOf('registry-release').includes('registry-smoke'));
-      assert.equal(occurrences(workflow, 'contents: write'), 1);
-      assert(job('registry-release').includes('contents: write'));
+      assert(body.includes('gh release edit "$tag" --draft=false'));
+      assert(!body.includes('gh release create'), 'the release is drafted before publish, never here');
+      assert(!body.includes('gh release upload'), 'assets are attached before publish, never here');
+      assert(body.includes('draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"'));
+    });
+
+    it('should grant contents write only to the jobs that draft and publish the release', () => {
+      assert.equal(occurrences(workflow, 'contents: write'), 2);
+      for (const name of ['release-assets', 'registry-release']) {
+        assert(job(name).includes('contents: write'), `${name} must write the release`);
+        assert(!job(name).includes('id-token: write'), `${name} must not mint OIDC`);
+      }
+      assert(job('publish').includes('contents: read'));
+      assert(!job('publish').includes('contents: write'));
     });
   });
 
@@ -784,10 +866,19 @@ describe('CI workflow policy', () => {
       const consumers = [...jobs].filter(([, body]) => body.includes('download-verified-artifact'));
       assert.deepEqual(
         consumers.map(([name]) => name).sort((left, right) => left.localeCompare(right)),
-        ['assemble', 'browser', 'preview', 'preview-consumer', 'publish', 'registry-verify', 'smoke'],
+        [
+          'assemble',
+          'browser',
+          'preview',
+          'preview-consumer',
+          'publish',
+          'registry-verify',
+          'release-assets',
+          'smoke',
+        ],
         'every artifact-consuming job must use the verified download',
       );
-      assert.equal(occurrences(workflow, 'uses: ./.github/actions/download-verified-artifact'), 10);
+      assert.equal(occurrences(workflow, 'uses: ./.github/actions/download-verified-artifact'), 12);
     });
 
     it('should name the file each frozen artifact must land', () => {
@@ -919,6 +1010,7 @@ describe('CI workflow policy', () => {
         preflight: ['scripts/ci-release.mjs'],
         'registry-smoke': ['scripts/test-package.mjs'],
         'registry-verify': ['scripts/registry-wait.mjs', 'scripts/verify-release-attestations.mjs'],
+        'release-assets': ['scripts/verify-engine-assets.mjs'],
         smoke: ['scripts/test-package.mjs'],
       });
 
@@ -950,7 +1042,9 @@ describe('CI workflow policy', () => {
       ]) {
         assert(body.includes(`'${required}'`), `ci-gate must require ${required}`);
       }
-      assert(body.includes("'publish', 'registry-verify', 'registry-smoke', 'registry-release'"));
+      assert(
+        body.includes("'release-assets', 'publish', 'registry-verify', 'registry-smoke', 'registry-release'"),
+      );
       assert(!body.includes('preview'), 'previews are report-only: ci-gate must not need or require them');
     });
   });

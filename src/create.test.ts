@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { bindHost, packagedGlue, packagedModuleUrl, type Host } from '#create.js';
+import { bindHost, packagedGlue, type Host } from '#create.js';
 import type { Engine } from '#engine.js';
 import { CadmpegError } from '#errors.js';
+import { modules, type ModuleId } from '#formats.js';
+import { packagedModuleUrl } from '#packaged.js';
 
-const stepGlue = {
+/** A fresh step glue: real glue is a module singleton, instantiated once per realm. */
+const stepGlue = () => ({
   default: vi.fn(async () => undefined),
   detect: vi.fn(() => 'step'),
   convert: vi.fn(() => ({
@@ -12,7 +15,7 @@ const stepGlue = {
     report: JSON.stringify({ from: 'step', to: 'step', losses: [], notes: [] }),
     free: () => undefined,
   })),
-};
+});
 const step = new TextEncoder().encode('ISO-10303-21;');
 const nativeEngine: Engine = {
   backend: 'native',
@@ -22,8 +25,8 @@ const nativeEngine: Engine = {
   }),
 };
 
-const host = (overrides: Partial<Host> = {}): Host => ({
-  loadGlue: async () => stepGlue,
+const host = (overrides: Partial<Host> = {}, glue = stepGlue()): Host => ({
+  loadGlue: async () => glue,
   locateModule: () => '/default',
   ...overrides,
 });
@@ -67,6 +70,37 @@ describe('createCadmpeg', () => {
   });
 });
 
+describe('an entry point without a packaged locator', () => {
+  const core = (glue = stepGlue()) => bindHost({ loadGlue: async () => glue });
+
+  it.each(['auto', 'wasm'] as const)('refuses %s without locateModule', async (backend) => {
+    await expect(core().createCadmpeg({ backend })).rejects.toMatchObject({
+      code: 'INVALID_OPTIONS',
+      message: expect.stringContaining('locateModule'),
+    });
+  });
+
+  it('still refuses the native backend as unavailable', async () => {
+    await expect(core().createCadmpeg({ backend: 'native' })).rejects.toMatchObject({
+      code: 'BACKEND_UNAVAILABLE',
+    });
+  });
+
+  it('converts through the module the caller locates', async () => {
+    const locateModule = vi.fn(() => '/located');
+    const converter = await core().createCadmpeg({ locateModule });
+    expect(converter.backend).toBe('wasm');
+    await converter.convert(step, { to: 'step' });
+    expect(locateModule).toHaveBeenCalledWith('step');
+  });
+
+  it('keeps a native-capable host on the native backend with no locator', async () => {
+    const glue = stepGlue();
+    const native = bindHost({ loadGlue: async () => glue, loadNative: async () => nativeEngine });
+    expect((await native.createCadmpeg()).backend).toBe('native');
+  });
+});
+
 describe('one-shot functions', () => {
   it('share one converter', async () => {
     const loadNative = vi.fn(async () => nativeEngine);
@@ -82,8 +116,8 @@ describe('packaged modules', () => {
     expect(packagedModuleUrl('sldprt').pathname.endsWith('/wasm/sldprt_bg.wasm')).toBe(true);
   });
 
-  it('import glue from ./wasm', async () => {
-    const outcome = await packagedGlue('step').then(
+  it.each(Object.keys(modules) as ModuleId[])('import the %s glue from ./wasm', async (id) => {
+    const outcome = await packagedGlue(id).then(
       (glue) => typeof glue.convert,
       (error: unknown) => (error instanceof Error ? 'missing' : 'unknown'),
     );

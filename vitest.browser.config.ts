@@ -22,12 +22,17 @@ const instances = requestedBrowser
 const rootPackage = resolve(process.env['CADMPEG_TS_ROOT_PACKAGE'] ?? '.');
 
 export default defineConfig({
+  // `cadmpeg-ts/core` callers fetch the modules themselves; the test serves
+  // them from the package under test.
+  define: { __CADMPEG_TS_WASM_BASE__: JSON.stringify(`/@fs${resolve(rootPackage, 'dist/wasm')}/`) },
   resolve: {
-    alias: {
-      // The `node` export condition never applies in a browser, so the public
-      // facade resolves to the universal entry point the way a bundler does.
-      'cadmpeg-ts': resolve(rootPackage, 'dist/index.mjs'),
-    },
+    // The `node` export condition never applies in a browser, so each public
+    // entry resolves to its default condition the way a bundler does.
+    alias: [
+      { find: /^cadmpeg-ts$/u, replacement: resolve(rootPackage, 'dist/index.mjs') },
+      { find: /^cadmpeg-ts\/core$/u, replacement: resolve(rootPackage, 'dist/core.mjs') },
+      { find: /^cadmpeg-ts\/digests$/u, replacement: resolve(rootPackage, 'dist/digests.mjs') },
+    ],
   },
   server: { fs: { allow: [resolve('.'), rootPackage] } },
   test: {

@@ -66,6 +66,14 @@ const startsWith = (bytes: Uint8Array, text: string): boolean => {
  * @param locateModule - Finds a module's WebAssembly binary.
  * @returns The engine.
  */
+/**
+ * Glue modules whose WebAssembly is already instantiated. wasm-bindgen glue is a
+ * module singleton that ignores later `default()` calls, so a second converter
+ * reuses the instance; skipping `default()` also skips `locateModule`, which
+ * would otherwise fetch bytes nobody reads (and leave a failed fetch unhandled).
+ */
+const instantiated = new WeakSet<WasmGlue>();
+
 export const createWasmEngine = (loadGlue: LoadGlue, locateModule: LocateModule): Engine => {
   const instances = new Map<ModuleId, Promise<WasmGlue>>();
 
@@ -74,7 +82,10 @@ export const createWasmEngine = (loadGlue: LoadGlue, locateModule: LocateModule)
     if (!instance) {
       instance = (async () => {
         const glue = await loadGlue(id);
-        await glue.default({ module_or_path: locateModule(id) });
+        if (!instantiated.has(glue)) {
+          await glue.default({ module_or_path: locateModule(id) });
+          instantiated.add(glue);
+        }
         return glue;
       })();
       instances.set(id, instance);

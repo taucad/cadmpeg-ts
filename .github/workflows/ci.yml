@@ -170,6 +170,7 @@ jobs:
           tests/pack-test-tarballs.test.mjs
           tests/verify-preview-install.test.mjs
           tests/registry-wait.test.mjs
+          tests/module-digests.test.mjs
       - name: Require a Version Plan for release-affecting changes
         if: needs.preflight.outputs.kind != 'release-pull-request' && needs.preflight.outputs.kind != 'release'
         shell: bash
@@ -592,6 +593,15 @@ jobs:
       - name: Pack the frozen test tarballs
         run: node scripts/pack-test-tarballs.mjs --out tarballs ${NATIVE_SUBSET:+--targets "$NATIVE_SUBSET"}
       - run: node scripts/validate-pack.mjs
+      # A browser app built with Vite against the packed root: 13 .wasm through
+      # `cadmpeg-ts`, none through `cadmpeg-ts/core`, and no glue file that
+      # reads import.meta.url.
+      - name: Count the engines a bundler emits through each entry
+        run: node scripts/test-bundle.mjs --tarballs tarballs
+      # copy-assets wrote engine-assets/ and dist/digests.mjs from the same
+      # bytes; prove the pair before either leaves this job.
+      - name: Verify the gzip release assets against the digest map
+        run: node scripts/verify-engine-assets.mjs --package . --assets engine-assets
       - id: freeze
         name: Freeze the prepared release tree
         run: |
@@ -606,7 +616,7 @@ jobs:
             cpSync(entry, `prepared/${entry}`, { recursive: true });
           }
           NODE
-          cp scripts/validate-pack.mjs scripts/package-files.mjs prepared/scripts/
+          cp scripts/validate-pack.mjs scripts/package-files.mjs scripts/module-digests.mjs prepared/scripts/
           archive="prepared-release-$version.tgz"
           tar -czf "$archive" -C prepared .
           sha256sum "$archive" > "$archive.sha256"
@@ -628,6 +638,14 @@ jobs:
           path: |
             prepared-release-*.tgz
             prepared-release-*.tgz.sha256
+          if-no-files-found: error
+          retention-days: ${{ needs.preflight.outputs.kind == 'release' && 30 || 1 }}
+      # The 13 `<id>_bg.wasm.gz` files and their SHA256SUMS, outside
+      # package.json#files: they go to the GitHub Release, never to npm.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engine-assets
+          path: engine-assets/
           if-no-files-found: error
           retention-days: ${{ needs.preflight.outputs.kind == 'release' && 30 || 1 }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -836,9 +854,73 @@ jobs:
           --metadata preview/preview.json
           --sha '${{ needs.preview.outputs.sha }}'
 
-  publish:
+  # Attach the gzip engines to a draft GitHub Release before anything reaches
+  # npm: a missing or differing asset fails here,
+  # and publish needs this job, so it publishes nothing. An asset already on
+  # the release is never replaced; one that differs from the map fails the
+  # run. registry-release publishes the draft once the registry is verified.
+  release-assets:
     if: needs.preflight.outputs.npm-publish == 'true'
     needs: [preflight, assemble, docs-prose, smoke, browser, security]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26'
+      - uses: ./.github/actions/download-verified-artifact
+        with:
+          name: prepared-release
+          path: prepared-release
+          expect: ${{ needs.assemble.outputs.archive }} ${{ needs.assemble.outputs.archive }}.sha256
+      - uses: ./.github/actions/download-verified-artifact
+        with:
+          name: engine-assets
+          path: engine-assets
+          expect: SHA256SUMS
+      - name: Extract the frozen release tree
+        env:
+          ARCHIVE: ${{ needs.assemble.outputs.archive }}
+        run: |
+          cd prepared-release
+          sha256sum --check "$ARCHIVE.sha256"
+          cd ..
+          mkdir -p release
+          tar -xzf "prepared-release/$ARCHIVE" -C release
+      - name: Verify the assembled assets against the frozen digest map
+        run: node scripts/verify-engine-assets.mjs --package release --assets engine-assets
+      - name: Attach the assets to the draft release without replacing any
+        run: |
+          tag="v$VERSION"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --target '${{ github.sha }}' --generate-notes
+          fi
+          attached="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+          for file in engine-assets/*_bg.wasm.gz; do
+            name="$(basename "$file")"
+            if grep --quiet --line-regexp --fixed-strings "$name" <<<"$attached"; then
+              echo "$name is already attached; it is verified below, never replaced"
+            else
+              gh release upload "$tag" "$file"
+            fi
+          done
+      - name: Verify the attached assets before npm publication
+        run: |
+          rm -rf attached
+          gh release download "v$VERSION" --pattern '*_bg.wasm.gz' --dir attached
+          node scripts/verify-engine-assets.mjs --package release --assets attached
+
+  publish:
+    if: needs.preflight.outputs.npm-publish == 'true'
+    needs: [preflight, assemble, docs-prose, smoke, browser, security, release-assets]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1004,14 +1086,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Record the verified release
+      # release-assets drafted the release and attached the engines before
+      # publish; publishing the draft creates the tag. A re-run finds it
+      # already published and changes nothing.
+      - name: Publish the verified release
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           tag="v$VERSION"
-          gh release view "$tag" >/dev/null 2>&1 \
-            || gh release create "$tag" --target '${{ github.sha }}' --generate-notes
+          draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"
+          if [[ "$draft" == true ]]; then
+            gh release edit "$tag" --draft=false
+          fi
 
   ci-gate:
     if: always()
@@ -1028,6 +1116,7 @@ jobs:
         smoke,
         browser,
         security,
+        release-assets,
         publish,
         registry-verify,
         registry-smoke,
@@ -1056,7 +1145,7 @@ jobs:
             'security',
           ];
           if (needs.preflight?.result === 'success' && process.env.PUBLISH === 'true') {
-            required.push('publish', 'registry-verify', 'registry-smoke', 'registry-release');
+            required.push('release-assets', 'publish', 'registry-verify', 'registry-smoke', 'registry-release');
           }
           const failures = required.filter((name) => needs[name]?.result !== 'success');
           if (failures.length) throw new Error(`required jobs did not pass: ${failures.join(', ')}`);

@@ -118,6 +118,14 @@ describe('universal entry point boundary', () => {
     for (const file of files) expect(readFileSync(file, 'utf8')).not.toContain('./native/index.js');
   });
 
+  it('should reach no Node builtin and no packaged binary from src/core.ts', () => {
+    const { files, specifiers } = walk('src/core.ts');
+
+    expect(files).toContain(path.resolve(root, 'src/wasm-engine.ts'));
+    expect(specifiers.filter((specifier) => isBuiltin(specifier))).toEqual([]);
+    for (const file of files) expect(readFileSync(file, 'utf8')).not.toContain('import.meta.url');
+  });
+
   it('should reach a Node builtin and the generated loader from src/index.node.ts', () => {
     // The negative control: the same walk over the Node entry point proves the
     // assertion above measures the boundary rather than an empty graph. The
@@ -162,6 +170,32 @@ dist('built universal entry point', () => {
     expect(specifiers.filter((specifier) => isBuiltin(specifier))).toEqual([]);
     expect(specifiers.filter((specifier) => referencesNativeLoader(specifier))).toEqual([]);
     for (const file of files) expect(readFileSync(file, 'utf8')).not.toContain('./native/index.js');
+  });
+
+  it('should name no packaged binary anywhere dist/core.mjs reaches', () => {
+    // Engine delivery charter F2: a bundler emits every binary a reached file
+    // names through import.meta.url, the glue included.
+    const { files, specifiers } = walkOutput('dist/core.mjs');
+
+    expect(files).toContain(path.resolve(root, 'dist/create.mjs'));
+    expect(files.filter((file) => file.includes(`${path.sep}wasm${path.sep}`))).toHaveLength(13);
+    expect(specifiers.filter((specifier) => isBuiltin(specifier))).toEqual([]);
+    for (const file of files) expect(readFileSync(file, 'utf8')).not.toContain('import.meta.url');
+    // The negative control: the packaged entry does name them.
+    expect(
+      walkOutput('dist/index.mjs').files.some((file) =>
+        readFileSync(file, 'utf8').includes('import.meta.url'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should export the engine-free entry under the node condition as the Node entry', () => {
+    const manifest = JSON.parse(readFileSync(path.resolve(root, 'package.json'), 'utf8'));
+    expect(manifest.exports['./core'].import).toEqual({
+      types: './dist/core.d.mts',
+      node: manifest.exports['.'].import.node,
+      default: './dist/core.mjs',
+    });
   });
 
   it('should reach the generated loader from dist/index.node.mjs', () => {

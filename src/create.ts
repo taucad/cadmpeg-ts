@@ -28,8 +28,10 @@ export type CreateCadmpegOptions = {
   readonly backend?: BackendPreference;
   /**
    * Find a format module's WebAssembly binary: a URL, a `Response`, bytes or
-   * a compiled `WebAssembly.Module`. The default resolves the binary that
-   * ships beside the package, `cadmpeg-ts/wasm/<id>_bg.wasm`.
+   * a compiled `WebAssembly.Module`. `cadmpeg-ts` and its Node.js entry
+   * default to the binary that ships beside the package,
+   * `cadmpeg-ts/wasm/<id>_bg.wasm`. `cadmpeg-ts/core` outside Node.js has no
+   * default and needs this option.
    */
   readonly locateModule?: LocateModule;
 };
@@ -44,8 +46,11 @@ export type Host = {
   readonly loadNative?: () => Promise<Engine>;
   /** Loads a module's wasm-bindgen glue. */
   readonly loadGlue: LoadGlue;
-  /** The default module locator. */
-  readonly locateModule: LocateModule;
+  /**
+   * The default module locator. Absent on `cadmpeg-ts/core`, whose callers
+   * locate every module themselves.
+   */
+  readonly locateModule?: LocateModule;
 };
 
 const backends = new Set<string>(['auto', 'native', 'wasm']);
@@ -64,8 +69,16 @@ export const bindHost = (host: Host) => {
     if (!backends.has(backend)) {
       throw new CadmpegError('INVALID_OPTIONS', `unknown backend ${backend}`);
     }
-    const wasm = (): Cadmpeg =>
-      fromEngine(createWasmEngine(host.loadGlue, options.locateModule ?? host.locateModule));
+    const locateModule = options.locateModule ?? host.locateModule;
+    const wasm = (): Cadmpeg => {
+      if (!locateModule) {
+        throw new CadmpegError(
+          'INVALID_OPTIONS',
+          'cadmpeg-ts/core packages no module locator; pass `locateModule`, or import `cadmpeg-ts` to load the packaged modules',
+        );
+      }
+      return fromEngine(createWasmEngine(host.loadGlue, locateModule));
+    };
     if (backend === 'wasm') return wasm();
     if (!host.loadNative) {
       if (backend === 'native') {
@@ -121,14 +134,30 @@ export const bindHost = (host: Host) => {
   return { createCadmpeg, convert, convertFormats };
 };
 
-/**
- * The module locator that resolves binaries shipped beside the package.
- *
- * @internal
- * @param id - Module id.
- * @returns The binary's URL.
- */
-export const packagedModuleUrl = (id: ModuleId): URL => new URL(`./wasm/${id}_bg.wasm`, import.meta.url);
+// One literal specifier per module. Bundlers skip template-literal imports
+// under node_modules (Vite's dynamic-import-vars excludes it by default), so a
+// template would leave the glue unbundled in every consumer app; literals are
+// followed by every bundler. The `as string` keeps TypeScript from resolving
+// glue that exists only after `pnpm run build:wasm`; the emitted JavaScript
+// keeps the literal. tests/workflow-policy and test-bundle.mjs hold the table
+// to src/formats.ts.
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-unsafe-return -- the assertion stops TypeScript resolving build output; the result is typed by `packagedGlue` */
+const glue: Readonly<Record<ModuleId, () => Promise<unknown>>> = {
+  step: async () => import('./wasm/step.js' as string),
+  iges: async () => import('./wasm/iges.js' as string),
+  sat: async () => import('./wasm/sat.js' as string),
+  fcstd: async () => import('./wasm/fcstd.js' as string),
+  f3d: async () => import('./wasm/f3d.js' as string),
+  inventor: async () => import('./wasm/inventor.js' as string),
+  sldprt: async () => import('./wasm/sldprt.js' as string),
+  catia: async () => import('./wasm/catia.js' as string),
+  creo: async () => import('./wasm/creo.js' as string),
+  nx: async () => import('./wasm/nx.js' as string),
+  rhino: async () => import('./wasm/rhino.js' as string),
+  pvz: async () => import('./wasm/pvz.js' as string),
+  usd: async () => import('./wasm/usd.js' as string),
+};
+/* eslint-enable @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-unsafe-return */
 
 /**
  * Load a packaged module's glue.
@@ -137,5 +166,4 @@ export const packagedModuleUrl = (id: ModuleId): URL => new URL(`./wasm/${id}_bg
  * @param id - Module id.
  * @returns The glue module.
  */
-export const packagedGlue: LoadGlue = async (id) =>
-  (await import(`./wasm/${id}.js`)) as Awaited<ReturnType<LoadGlue>>;
+export const packagedGlue: LoadGlue = async (id) => (await glue[id]()) as Awaited<ReturnType<LoadGlue>>;

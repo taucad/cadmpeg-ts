@@ -51,10 +51,27 @@
       },
       "default": "./dist/index.mjs"
     },
+    "./core": {
+      "import": {
+        "types": "./dist/core.d.mts",
+        "node": "./dist/index.node.mjs",
+        "default": "./dist/core.mjs"
+      },
+      "require": {
+        "types": "./dist/cjs-error.d.cts",
+        "default": "./dist/cjs-error.cjs"
+      },
+      "default": "./dist/core.mjs"
+    },
     "./formats": {
       "types": "./dist/formats.d.mts",
       "import": "./dist/formats.mjs",
       "default": "./dist/formats.mjs"
+    },
+    "./digests": {
+      "types": "./dist/digests.d.mts",
+      "import": "./dist/digests.mjs",
+      "default": "./dist/digests.mjs"
     },
     "./wasm/*": {
       "default": "./dist/wasm/*"
@@ -76,7 +93,7 @@
     "lint": "oxlint --deny-warnings --type-aware && eslint .",
     "patches": "node scripts/apply-patches.mjs",
     "patches:check": "node scripts/apply-patches.mjs --check",
-    "pkgcheck": "pnpm run validate-pack && publint && attw --pack . --profile esm-only --entrypoints .",
+    "pkgcheck": "pnpm run validate-pack && publint && attw --pack . --profile esm-only --entrypoints . ./core ./formats ./digests",
     "plan:check": "nx release plan:check",
     "prepublishOnly": "node scripts/validate-pack.mjs",
     "prose": "./scripts/check-prose.sh",
@@ -115,6 +132,7 @@
     "tsdown": "0.22.14",
     "typescript": "5.9.3",
     "typescript-eslint": "8.61.1",
+    "vite": "8.2.4",
     "vitest": "4.1.12"
   },
   "napi": {

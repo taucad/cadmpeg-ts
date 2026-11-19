@@ -5,8 +5,8 @@
 
 import { readFile } from 'node:fs/promises';
 
-import { packagedModuleUrl } from '#create.js';
 import type { ModuleId } from '#formats.js';
+import { packagedModuleUrl } from '#packaged.js';
 
 /**
  * Read a packaged module's WebAssembly binary.

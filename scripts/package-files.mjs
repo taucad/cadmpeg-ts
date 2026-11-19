@@ -1,11 +1,14 @@
 import path from 'node:path';
 
-// The 0.1.0-beta.0 package contract: the TypeScript facade, the generated
-// NAPI-RS loader, and one glue file plus one binary per format module
-// (src/formats.ts). Changes require explicit admission.
-const PACKAGE_FILE_COUNT_CEILING = 55;
+// The package contract: the TypeScript facade, the generated NAPI-RS loader,
+// one glue file plus one binary per format module (src/formats.ts), and the
+// generated digest map. Changes require explicit admission. 0.1.0-beta.0
+// shipped 55 files; the engine-free `core` entry and the `digests` map add a
+// module and a declaration each, and the packaged locator moved out of
+// create.mjs into packaged.mjs so `core` does not reach it.
+const PACKAGE_FILE_COUNT_CEILING = 60;
 
-const MODULES = [
+export const MODULES = [
   'step',
   'iges',
   'sat',
@@ -20,7 +23,18 @@ const MODULES = [
   'pvz',
   'usd',
 ];
-const TYPESCRIPT = ['cadmpeg', 'create', 'engine', 'errors', 'formats', 'index', 'index.node', 'wasm-engine'];
+const TYPESCRIPT = [
+  'cadmpeg',
+  'core',
+  'create',
+  'digests',
+  'engine',
+  'errors',
+  'formats',
+  'index',
+  'index.node',
+  'wasm-engine',
+];
 
 export const PACKAGE_FILES = [
   'BREAKING_CHANGES.md',
@@ -32,6 +46,7 @@ export const PACKAGE_FILES = [
   'dist/cjs-error.d.cts',
   'dist/native-engine.mjs',
   'dist/node-host.mjs',
+  'dist/packaged.mjs',
   'dist/native/index.js',
   'dist/wasm/package.json',
   'license',
