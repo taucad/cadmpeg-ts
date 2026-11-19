@@ -20,8 +20,21 @@ export const npmView = (name, version) => {
 };
 
 /**
- * Wait for the registry to serve every packed package with an attestation and
- * the integrity `npm pack` recorded for the frozen tarball.
+ * Whether the registry serves a tarball yet. Metadata and attestations can be
+ * visible minutes before the tarball itself downloads (a 404 from the CDN).
+ */
+export const tarballServed = async (url) => {
+  try {
+    return (await fetch(url, { method: 'HEAD' })).ok;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Wait for the registry to serve every packed package with an attestation, a
+ * downloadable tarball and the integrity `npm pack` recorded for the frozen
+ * tarball.
  *
  * npm scans packages at publish time, so a successful publish is invisible to
  * `npm view` for minutes. The wait is bounded rather than optimistic: each wait
@@ -34,6 +47,7 @@ export const waitForRegistry = async ({
   log = (message) => process.stdout.write(`${message}\n`),
   maxIntervalMs = DEFAULT_MAX_INTERVAL_MS,
   now = Date.now,
+  served = tarballServed,
   sleep = delay,
   tarballs,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -60,6 +74,10 @@ export const waitForRegistry = async ({
       }
       if (!metadata.dist.attestations) {
         unavailable.set(name, 'no attestations');
+        continue;
+      }
+      if (!(await served(metadata.dist.tarball))) {
+        unavailable.set(name, 'tarball not served');
         continue;
       }
       unavailable.delete(name);

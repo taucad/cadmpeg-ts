@@ -16,10 +16,14 @@ const tarballs = {
 };
 
 const published = (integrity) => ({
-  dist: { attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations' }, integrity },
+  dist: {
+    attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations' },
+    integrity,
+    tarball: `https://registry.npmjs.org/${integrity}.tgz`,
+  },
 });
 
-const harness = ({ view }) => {
+const harness = ({ view, served = async () => true }) => {
   const logged = [];
   const sleeps = [];
   let clock = 0;
@@ -28,6 +32,7 @@ const harness = ({ view }) => {
     options: {
       log: (message) => logged.push(message),
       now: () => clock,
+      served,
       sleep: async (milliseconds) => {
         sleeps.push(milliseconds);
         clock += milliseconds;
@@ -55,6 +60,32 @@ describe('bounded registry visibility wait', () => {
     assert.deepEqual(sleeps, [30_000, 60_000]);
     assert.equal(logged.at(-1), 'all 2 packages are visible with matching integrity');
     assert.match(logged[0], /^attempt 1 after 0s: 0\/2 packages available$/u);
+  });
+
+  it('should keep waiting while the metadata is visible but the tarball is not', async () => {
+    let darwinAsked = 0;
+    const { logged, options, sleeps } = harness({
+      served: async (url) => !url.endsWith('sha512-darwin.tgz') || ++darwinAsked > 1,
+      view: (name) => published(name === 'cadmpeg-ts' ? 'sha512-root' : 'sha512-darwin'),
+    });
+
+    await waitForRegistry(options);
+
+    assert.deepEqual(sleeps, [30_000]);
+    assert.match(logged[0], /^attempt 1 after 0s: 1\/2 packages available$/u);
+    assert.equal(logged.at(-1), 'all 2 packages are visible with matching integrity');
+  });
+
+  it('should name a tarball the registry never serves when it times out', async () => {
+    const { options } = harness({
+      served: async () => false,
+      view: (name) => published(name === 'cadmpeg-ts' ? 'sha512-root' : 'sha512-darwin'),
+    });
+
+    await assert.rejects(
+      waitForRegistry({ ...options, timeoutMs: 60_000 }),
+      /cadmpeg-ts \(tarball not served\)/u,
+    );
   });
 
   it('should stop polling a package that is already visible', async () => {
