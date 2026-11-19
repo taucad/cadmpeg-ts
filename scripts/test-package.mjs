@@ -530,8 +530,14 @@ const main = () => {
     console.log(`installed platform packages: ${checkInstalledPlatformPackages(installed, rule)}`);
 
     writeFileSync(join(work, 'consumer.mjs'), consumerSource(import.meta.url));
+    // Under QEMU, V8's optimizing WebAssembly tier on s390x runs the
+    // SOLIDWORKS module wrongly: Node 22 crashes with SIGSEGV once a hot
+    // function tiers up, and Node 26 writes a different byte. The baseline
+    // tier (Liftoff), the native addon and every other host agree, so the
+    // s390x rows check parity on Liftoff only. compatibility.md records it.
+    const v8Flags = suffix.startsWith('linux-s390x') ? ['--liftoff-only'] : [];
     const runConsumer = (...phase) =>
-      execFileSync(process.execPath, ['consumer.mjs', ...phase], {
+      execFileSync(process.execPath, [...v8Flags, 'consumer.mjs', ...phase], {
         cwd: work,
         env: {
           ...process.env,
